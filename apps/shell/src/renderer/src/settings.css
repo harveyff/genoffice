@@ -1,3 +1,5 @@
+@import './home.css';
+
 /* Settings modal (opened from the account menu): two-pane dialog matched to
    GenMail's settings window (values read from its packaged CSS) — borderless
    header/nav, label-left / control-right rows with hairline dividers.
@@ -81,40 +83,6 @@
   gap: 10px;
   width: 100%;
   padding: 8px 12px;
-/* Standalone settings window: sidebar + scrolling panel.
-   Reuses the .ai-* field primitives and .btn styles from home.css. */
-@import './home.css';
-
-body {
-  overflow: hidden;
-}
-
-.settings {
-  display: flex;
-  height: 100vh;
-}
-
-.settings-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex-shrink: 0;
-  width: 200px;
-  padding: 18px 10px;
-  border-right: 1px solid var(--border);
-  background: var(--surface-subtle);
-  overflow-y: auto;
-}
-
-.settings-nav-title {
-  padding: 0 10px;
-  margin-bottom: 14px;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.settings-nav-item {
-  padding: 8px 10px;
   border: none;
   border-radius: 8px;
   background: none;
@@ -351,6 +319,46 @@ body {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* Standalone settings window: sidebar + scrolling panel.
+   Reuses the .ai-* field primitives and .btn styles from home.css. */
+
+html:has(.settings) body {
+  overflow: hidden;
+}
+
+.settings {
+  display: flex;
+  height: 100vh;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+  width: 200px;
+  padding: 18px 10px;
+  border-right: 1px solid var(--border);
+  background: var(--surface-subtle);
+  overflow-y: auto;
+}
+
+.settings-nav-title {
+  padding: 0 10px;
+  margin-bottom: 14px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-nav-item {
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  font: inherit;
+  font-size: 14px;
   color: var(--text);
   text-align: start;
   cursor: pointer;
