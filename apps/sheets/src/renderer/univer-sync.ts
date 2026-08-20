@@ -25,6 +25,7 @@ import {
 import { IRenderManagerService } from '@univerjs/engine-render'
 import { CFValueType, type IValueConfig } from '@univerjs/preset-sheets-conditional-formatting'
 
+import { aiIconConfigs } from '../domain/workbook-dsl'
 import type {
   AddConditionalFormatOperation,
   CellFormatPatch,
@@ -560,6 +561,18 @@ export function applyAiConditionalFormat(
     )
     return
   }
+  if (rule.kind === 'iconSet') {
+    worksheet.addConditionalFormattingRule(
+      builder
+        .setIconSet({
+          iconConfigs: aiIconConfigs(rule.set, rule.reverse === true),
+          isShowValue: rule.hideValue !== true,
+        } as Parameters<typeof builder.setIconSet>[0])
+        .setRanges(ranges)
+        .build(),
+    )
+    return
+  }
   let styled = buildAiHighlight(builder, rule)
   if (rule.format.fillColor !== undefined) styled = styled.setBackground(rule.format.fillColor)
   if (rule.format.fontColor !== undefined) styled = styled.setFontColor(rule.format.fontColor)
@@ -572,7 +585,7 @@ function buildAiHighlight(
   builder: ReturnType<UniverWorksheet['newConditionalFormattingRule']>,
   rule: Exclude<
     AddConditionalFormatOperation['rule'],
-    { kind: 'colorScale' } | { kind: 'dataBar' }
+    { kind: 'colorScale' } | { kind: 'dataBar' } | { kind: 'iconSet' }
   >,
 ): CfHighlightBuilder {
   switch (rule.kind) {
@@ -620,6 +633,19 @@ function buildAiHighlight(
       })
     case 'formula':
       return builder.whenFormulaSatisfied(rule.formula)
+    case 'average':
+      // Univer names these by comparison operator; xlsx writes them as
+      // aboveAverage with optional equalAverage, which is the same four cases
+      return builder.setAverage(
+        (
+          {
+            above: 'greaterThan',
+            aboveOrEqual: 'greaterThanOrEqual',
+            below: 'lessThan',
+            belowOrEqual: 'lessThanOrEqual',
+          } as const
+        )[rule.operator] as Parameters<typeof builder.setAverage>[0],
+      )
   }
   throw new Error('Unsupported conditional-format rule.')
 }

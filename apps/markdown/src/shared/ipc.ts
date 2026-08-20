@@ -144,6 +144,8 @@ export interface MarkdownApi {
    *  clicks produce no DOM event here) — dismiss open popovers */
   onChromePressed(handler: () => void): () => void
   getAiSettings(): Promise<AiSettings>
+  /** Switch the live model; null selects the Genspark account. Returns the settled settings. */
+  setActiveModel(profileId: string | null): Promise<AiSettings>
   aiStream(request: AiStreamRequest): Promise<void>
   aiStreamCancel(requestId: string): Promise<void>
   onAiStream(handler: (chunk: AiStreamChunk) => void): () => void

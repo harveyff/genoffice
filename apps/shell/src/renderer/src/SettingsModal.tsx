@@ -250,6 +250,18 @@ export function SettingsModal({
               <>
                 <h3 className="set-pane-title">{t('setSecAccount')}</h3>
                 <Field label={t('setEmail')} value={loggedIn ? email : t('setNotLoggedIn')} />
+                <Field
+                  label={t('setSecModel')}
+                  value="Genspark / OpenAI-compatible"
+                  action={
+                    <button
+                      className="set-btn primary"
+                      onClick={() => void window.aiOffice.openSettings()}
+                    >
+                      {t('setTitle')}
+                    </button>
+                  }
+                />
                 {loggedIn && (
                   <Field
                     label={t('credits')}

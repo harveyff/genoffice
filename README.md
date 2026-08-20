@@ -93,13 +93,15 @@ tokens (`packages/ui`), with a CI guard that keeps chrome colors on the token
 system. Document surfaces stay light in dark mode — Word-style dark chrome
 around white paper — so files render and export identically in both themes.
 
-**AI backend (Genspark).** The apps sign in to a Genspark account through a
-device-code flow; no model API key is entered or stored by the user. Model
-calls route through the Genspark proxy (Claude, GPT, and Gemini families).
-The same account also unlocks the Genspark ("gsk") tool endpoints the agents
-build on — web and image search, image generation and editing,
-image/audio/video analysis, and audio transcription — all reachable through
-`packages/ai-search` for anyone extending the agent layer.
+**AI providers.** By default the apps sign in to a Genspark account and route
+model calls through the Genspark proxy (Claude, GPT, and Gemini families).
+Settings can instead point every app at any OpenAI-compatible endpoint (base
+URL, model name, optional API key — local servers such as Ollama, LM Studio,
+vLLM or an Olares Router need no special protocol), along with temperature,
+a max-token ceiling and `reasoning_effort`. The choice is stored once in
+`userData/ai-settings.json` and applies to Docs, Sheets, Slides and PDF.
+The Genspark account still unlocks gsk tool endpoints (search, image
+generation, media analysis) through `packages/ai-search`.
 
 ## Engine packages
 
