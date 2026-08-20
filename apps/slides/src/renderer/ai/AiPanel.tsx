@@ -450,8 +450,6 @@ export function AiPanel({
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
-  /** Past conversation restored from JSONL (read-only transcript, not fed to the model) */
-  const [historicChat, setHistoricChat] = useState<ChatEntry[]>([])
   /** this deck's stored conversations, for the session picker */
   const [sessions, setSessions] = useState<ChatMeta[]>([])
   const [sessionsOpen, setSessionsOpen] = useState(false)
