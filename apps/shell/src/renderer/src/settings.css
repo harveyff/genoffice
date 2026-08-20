@@ -343,13 +343,58 @@ html:has(.settings) body {
   border-right: 1px solid var(--border);
   background: var(--surface-subtle);
   overflow-y: auto;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.settings-nav-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 0 4px 0 10px;
 }
 
 .settings-nav-title {
-  padding: 0 10px;
-  margin-bottom: 14px;
+  padding: 0;
+  margin-bottom: 0;
   font-size: 15px;
   font-weight: 600;
+}
+
+.settings-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.settings-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.settings-nav-close {
+  margin-top: auto;
+  padding: 10px;
+  border: none;
+  border-radius: 8px;
+  background: var(--bg-hover);
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.settings-nav-close:hover {
+  background: var(--bg-hover-strong, var(--bg-hover));
 }
 
 .settings-nav-item {

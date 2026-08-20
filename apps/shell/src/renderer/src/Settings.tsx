@@ -66,13 +66,35 @@ export function SettingsApp({ initial }: { initial: SettingsSnapshot }) {
     void window.genofficeSettings.load().then(setSnapshot)
   }, [])
 
-  // main pushes this after an out-of-window change, e.g. a browser sign-in
+  const close = useCallback(() => {
+    void window.genofficeSettings.close()
+  }, [])
+
   useEffect(() => window.genofficeSettingsEvents.onChanged(reload), [reload])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [close])
 
   return (
     <div className="settings">
       <nav className="settings-nav" aria-label={t('setTitle')}>
-        <div className="settings-nav-title">{t('setTitle')}</div>
+        <div className="settings-nav-header">
+          <div className="settings-nav-title">{t('setTitle')}</div>
+          <button className="settings-close" type="button" onClick={close} aria-label={t('setClose')}>
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+              <path
+                d="M2 2l10 10M12 2L2 12"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+        </div>
         {SETTINGS_SECTIONS.map((id) => (
           <button
             key={id}
@@ -83,6 +105,9 @@ export function SettingsApp({ initial }: { initial: SettingsSnapshot }) {
             {t(SECTION_LABEL[id])}
           </button>
         ))}
+        <button className="settings-nav-close" type="button" onClick={close}>
+          {t('setClose')}
+        </button>
       </nav>
       <main className="settings-body">
         {section === 'model' && (

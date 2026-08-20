@@ -186,6 +186,7 @@ export const strings = {
     today: '今天',
     // Settings window
     setTitle: '设置',
+    setClose: '关闭',
     setSecModel: 'AI 模型',
     setSecNetwork: '网络与搜索',
     setSecRules: '规则',
@@ -431,6 +432,7 @@ export const strings = {
     today: 'Today',
     // Settings window
     setTitle: 'Settings',
+    setClose: 'Close',
     setSecModel: 'AI Model',
     setSecNetwork: 'Network & Search',
     setSecRules: 'Rules',
@@ -699,6 +701,7 @@ export const strings = {
     today: '今日',
     // Settings window
     setTitle: '設定',
+    setClose: '閉じる',
     setSecModel: 'AI モデル',
     setSecNetwork: 'ネットワークと検索',
     setSecRules: 'ルール',
@@ -960,6 +963,7 @@ export const strings = {
     today: '오늘',
     // Settings window
     setTitle: '설정',
+    setClose: '닫기',
     setSecModel: 'AI 모델',
     setSecNetwork: '네트워크 및 검색',
     setSecRules: '규칙',
@@ -1229,6 +1233,7 @@ export const strings = {
     today: "Aujourd'hui",
     // Settings window
     setTitle: 'Paramètres',
+    setClose: 'Fermer',
     setSecModel: 'Modèle IA',
     setSecNetwork: 'Réseau et recherche',
     setSecRules: 'Règles',
@@ -1500,6 +1505,7 @@ export const strings = {
     today: 'Heute',
     // Settings window
     setTitle: 'Einstellungen',
+    setClose: 'Schließen',
     setSecModel: 'KI-Modell',
     setSecNetwork: 'Netzwerk und Suche',
     setSecRules: 'Regeln',
@@ -1770,6 +1776,7 @@ export const strings = {
     today: 'Hoy',
     // Settings window
     setTitle: 'Configuración',
+    setClose: 'Cerrar',
     setSecModel: 'Modelo de IA',
     setSecNetwork: 'Red y búsqueda',
     setSecRules: 'Reglas',
@@ -2032,6 +2039,7 @@ export const strings = {
     today: 'วันนี้',
     // Settings window
     setTitle: 'การตั้งค่า',
+    setClose: 'ปิด',
     setSecModel: 'โมเดล AI',
     setSecNetwork: 'เครือข่ายและการค้นหา',
     setSecRules: 'กฎ',
@@ -2293,6 +2301,7 @@ export const strings = {
     today: 'Hari ini',
     // Settings window
     setTitle: 'Pengaturan',
+    setClose: 'Tutup',
     setSecModel: 'Model AI',
     setSecNetwork: 'Jaringan & Pencarian',
     setSecRules: 'Aturan',
@@ -2558,6 +2567,7 @@ export const strings = {
     today: 'Сегодня',
     // Settings window
     setTitle: 'Настройки',
+    setClose: 'Закрыть',
     setSecModel: 'Модель ИИ',
     setSecNetwork: 'Сеть и поиск',
     setSecRules: 'Правила',
@@ -2819,6 +2829,7 @@ export const strings = {
     today: 'اليوم',
     // Settings window
     setTitle: 'الإعدادات',
+    setClose: 'إغلاق',
     setSecModel: 'نموذج الذكاء الاصطناعي',
     setSecNetwork: 'الشبكة والبحث',
     setSecRules: 'القواعد',
@@ -3076,6 +3087,7 @@ export const strings = {
     today: 'Hoje',
     // Settings window
     setTitle: 'Definições',
+    setClose: 'Fechar',
     setSecModel: 'Modelo de IA',
     setSecNetwork: 'Rede e pesquisa',
     setSecRules: 'Regras',
@@ -3333,6 +3345,7 @@ export const strings = {
     today: 'Oggi',
     // Settings window
     setTitle: 'Impostazioni',
+    setClose: 'Chiudi',
     setSecModel: 'Modello IA',
     setSecNetwork: 'Rete e ricerca',
     setSecRules: 'Regole',
@@ -3588,6 +3601,7 @@ export const strings = {
     today: 'Dzisiaj',
     // Settings window
     setTitle: 'Ustawienia',
+    setClose: 'Zamknij',
     setSecModel: 'Model AI',
     setSecNetwork: 'Sieć i wyszukiwanie',
     setSecRules: 'Reguły',
@@ -3845,6 +3859,7 @@ export const strings = {
     today: 'Vandaag',
     // Settings window
     setTitle: 'Instellingen',
+    setClose: 'Sluiten',
     setSecModel: 'AI-model',
     setSecNetwork: 'Netwerk en zoeken',
     setSecRules: 'Regels',
@@ -4099,6 +4114,7 @@ export const strings = {
     today: 'Hari ini',
     // Settings window
     setTitle: 'Tetapan',
+    setClose: 'Tutup',
     setSecModel: 'Model AI',
     setSecNetwork: 'Rangkaian & Carian',
     setSecRules: 'Peraturan',
@@ -4347,6 +4363,7 @@ export const strings = {
     today: 'היום',
     // Settings window
     setTitle: 'הגדרות',
+    setClose: 'סגור',
     setSecModel: 'מודל AI',
     setSecNetwork: 'רשת וחיפוש',
     setSecRules: 'כללים',
@@ -4598,6 +4615,7 @@ export const strings = {
     today: 'आज',
     // Settings window
     setTitle: 'सेटिंग्स',
+    setClose: 'बंद करें',
     setSecModel: 'AI मॉडल',
     setSecNetwork: 'नेटवर्क और खोज',
     setSecRules: 'नियम',
@@ -4843,6 +4861,7 @@ export const strings = {
     today: '今天',
     // Settings window
     setTitle: '設定',
+    setClose: '關閉',
     setSecModel: 'AI 模型',
     setSecNetwork: '網路與搜尋',
     setSecRules: '規則',
