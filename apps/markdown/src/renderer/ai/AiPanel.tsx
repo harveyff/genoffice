@@ -616,16 +616,10 @@ export function AiPanel({
           {chat.length > 0 && (
             <button
               className="ai-header-btn"
-              onClick={() => {
-                stop()
-                loopRef.current?.reset()
-                setBusy(false)
-                setChat([])
-              }}
+              onClick={newChat}
               data-tip={t('aiNewChat')}
               aria-label={t('aiNewChat')}
             >
-            <button className="ai-header-btn" onClick={newChat} title={t('aiNewChat')}>
               <IconNewChat />
             </button>
           )}

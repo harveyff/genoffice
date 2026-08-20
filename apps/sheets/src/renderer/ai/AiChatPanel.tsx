@@ -561,14 +561,12 @@ export function AiChatPanel({
           {(chat.length > 0 || historicChat.length > 0) && (
             <button
               className="ai-header-btn"
-              onClick={onNewChat}
-              data-tip={t('aiNewChat')}
-              aria-label={t('aiNewChat')}
               onClick={() => {
                 setSessionsOpen(false)
                 onNewChat()
               }}
-              title={t('aiNewChat')}
+              data-tip={t('aiNewChat')}
+              aria-label={t('aiNewChat')}
             >
               <IconNewChat size={15} />
             </button>
