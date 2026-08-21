@@ -2998,9 +2998,6 @@ export function setDocsFileSavedHook(hook: (wc: WebContents, filePath: string) =
   fileSavedHook = hook
 }
 
-/** Shell tab title sync on open; optional — stubbed when not wired in docs-main yet. */
-export function setDocsFileOpenedHook(_hook: (wcId: number, filePath: string) => void): void {}
-
 function notifyFileSaved(wc: WebContents, filePath: string): void {
   if (fileSavedHook) fileSavedHook(wc, filePath)
 }
@@ -3987,9 +3984,21 @@ async function performDocsClose(
   const state = await queryCloseState(contents)
   if (!state.dirty || contents.isDestroyed()) return true
   if (state.unresponsive) {
-    // Renderer never answered (blank/stuck tab). Native message boxes over KasmVNC
-    // wedge the UI for tens of seconds — close without prompting.
-    return true
+    // No reply: saving through the renderer won't work either — offer Close Anyway / Cancel
+    const options = {
+      type: 'warning' as const,
+      message: tm('closeNoReplyMsg'),
+      detail: tm('closeNoReplyDetail'),
+      buttons: [tm('btnCloseAnyway'), tm('btnCancel')],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    }
+    const { response } =
+      parent && !parent.isDestroyed()
+        ? await dialog.showMessageBox(parent, options)
+        : await dialog.showMessageBox(options)
+    return response === 0
   }
   // autosave on (and has a path, already checked when the renderer reported): save silently and proceed; only prompt on failure
   if (state.autoSave && (await requestRendererSave(contents))) return true
