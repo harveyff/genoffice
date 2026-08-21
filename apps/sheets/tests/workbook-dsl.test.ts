@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  MAX_EXPANDED_CELL_OPS,
   expandToPrimitiveOps,
+  layoutOpLabel,
   structuralOpLabel,
   workbookCommandBatchSchema,
   workbookOperationSchema,
@@ -165,9 +165,22 @@ describe('expandToPrimitiveOps', () => {
   })
 
   it('rejects batches that expand past the cell-op ceiling', () => {
+    // clear_range above the ceiling stays range-level (covered by
+    // fill-range.test.ts); set_range still expands per cell and must reject.
     expect(() =>
       expandToPrimitiveOps([
-        { op: 'clear_range', sheetId: 's', range: `A1:C${MAX_EXPANDED_CELL_OPS}` },
+        {
+          op: 'set_range',
+          sheetId: 's',
+          start: 'A1',
+          values: Array.from({ length: 500 }, () => Array.from({ length: 100 }, () => 1)),
+        },
+        {
+          op: 'set_range',
+          sheetId: 's',
+          start: 'A501',
+          values: Array.from({ length: 500 }, () => Array.from({ length: 100 }, () => 1)),
+        },
       ]),
     ).toThrow(/2000/)
   })
@@ -625,13 +638,27 @@ describe('find_replace expansion', () => {
         },
       ]),
     ).toThrow(/needs the current cell contents/)
+    // Above the per-cell expansion cap the op passes through range-level
+    // (the executor scans loaded chunks itself, no reader needed) …
+    const rangeLevel = expandToPrimitiveOps([
+      {
+        op: 'find_replace',
+        sheetId: 's',
+        range: 'A1:Z1000',
+        find: 'a',
+        replace: 'b',
+      },
+    ])
+    expect(rangeLevel).toHaveLength(1)
+    expect(rangeLevel[0]?.op).toBe('find_replace')
+    // … up to the range-op cap.
     expect(() =>
       expandToPrimitiveOps(
         [
           {
             op: 'find_replace',
             sheetId: 's',
-            range: 'A1:Z1000',
+            range: 'A1:C100000',
             find: 'a',
             replace: 'b',
           },
@@ -639,5 +666,64 @@ describe('find_replace expansion', () => {
         reader({}),
       ),
     ).toThrow(/more than/)
+  })
+})
+
+// ────────────────────────────────────────────────────────────
+// Conditional formatting the AI can request
+// ────────────────────────────────────────────────────────────
+
+describe('add_conditional_format icon sets and averages', () => {
+  const cf = (rule: unknown) => ({
+    op: 'add_conditional_format',
+    sheetId: 's',
+    range: 'B2:B50',
+    rule,
+  })
+
+  /** parse, then narrow: the schema returns the whole op union */
+  const label = (rule: unknown): string => {
+    const op = workbookOperationSchema.parse(cf(rule))
+    if (op.op !== 'add_conditional_format') throw new Error('not a conditional-format op')
+    return layoutOpLabel(op)
+  }
+
+  it('accepts an icon set by name', () => {
+    expect(label({ kind: 'iconSet', set: '3TrafficLights1' })).toBe(
+      'Conditional format B2:B50: icon set 3TrafficLights1',
+    )
+  })
+
+  it('accepts a reversed icon set with the values hidden', () => {
+    expect(label({ kind: 'iconSet', set: '5Arrows', reverse: true, hideValue: true })).toBe(
+      'Conditional format B2:B50: icon set 5Arrows reversed',
+    )
+  })
+
+  it('rejects an icon set the save path cannot write', () => {
+    // 3Stars/5Boxes are Univer extras that only exist as x14 extensions
+    expect(() => workbookOperationSchema.parse(cf({ kind: 'iconSet', set: '3Stars' }))).toThrow()
+  })
+
+  it('accepts above/below average rules', () => {
+    for (const operator of ['above', 'below', 'aboveOrEqual', 'belowOrEqual'] as const) {
+      expect(label({ kind: 'average', operator, format: { bold: true } })).toBe(
+        `Conditional format B2:B50: ${operator} average`,
+      )
+    }
+  })
+
+  it('rejects an average rule with no formatting to apply', () => {
+    expect(() =>
+      workbookOperationSchema.parse(cf({ kind: 'average', operator: 'above', format: {} })),
+    ).toThrow()
+  })
+
+  it('rejects equality against the average, which xlsx cannot express', () => {
+    expect(() =>
+      workbookOperationSchema.parse(
+        cf({ kind: 'average', operator: 'equal', format: { bold: true } }),
+      ),
+    ).toThrow()
   })
 })

@@ -55,6 +55,7 @@ import type {
   DesktopFilesApi,
   EditBackgroundOp,
   EditFillOp,
+  EditFillImageOp,
   EditStrokeOp,
   FlipElementOp,
   EditTextOp,
@@ -139,8 +140,9 @@ const api: SlidesApi = {
     ipcRenderer.invoke('slides:edit-picture-src-rect', op),
   editPictureOpacity: (op: EditPictureOpacityOp) =>
     ipcRenderer.invoke('slides:edit-picture-opacity', op),
-  editImageFill: (op: { slideIndex: number; sourceId: string }) =>
-    ipcRenderer.invoke('slides:edit-image-fill', op),
+  editImageFill: (op: EditFillImageOp) => ipcRenderer.invoke('slides:edit-image-fill', op),
+  changeShape: (op: { slideIndex: number; sourceId: string; prst: string }) =>
+    ipcRenderer.invoke('slides:change-shape', op),
   setTextAnchor: (op: {
     slideIndex: number
     sourceId: string
@@ -289,9 +291,19 @@ const api: SlidesApi = {
   },
   getAiSettings: () => ipcRenderer.invoke('ai:get-settings'),
   setAiSettings: (settings: AiSettings) => ipcRenderer.invoke('ai:set-settings', settings),
+  setActiveModel: (profileId: string | null) =>
+    ipcRenderer.invoke('ai:set-active-model', profileId),
   aiStream: (request: AiStreamRequest) => ipcRenderer.invoke('ai:stream', request),
   aiStreamCancel: (requestId: string) => ipcRenderer.invoke('ai:stream-cancel', requestId),
   aiGskStatus: (withEmail?: boolean) => ipcRenderer.invoke('ai:gsk-status', withEmail),
+  aiBrowsePage: (url: string, opts?: { includeLinks?: boolean }) =>
+    ipcRenderer.invoke('ai:browse-page', url, opts),
+  aiExtractPages: (urls: string[], advanced?: boolean) =>
+    ipcRenderer.invoke('ai:extract-pages', urls, advanced),
+  aiInstructionsPrompt: (surface: string) => ipcRenderer.invoke('ai:instructions-prompt', surface),
+  aiSkillBody: (surface: string, id: string) => ipcRenderer.invoke('ai:skill-body', surface, id),
+  aiRemember: (text: string) => ipcRenderer.invoke('ai:remember', text),
+  aiForget: (text: string) => ipcRenderer.invoke('ai:forget', text),
   aiGskLogin: () => ipcRenderer.invoke('ai:gsk-login'),
   webSearch: (query: string, maxResults?: number) =>
     ipcRenderer.invoke('ai:web-search', query, maxResults),
@@ -387,5 +399,9 @@ const projectApi: ProjectApi = {
   deleteProject: (args) => ipcRenderer.invoke('project:delete', args),
   moveFile: (args) => ipcRenderer.invoke('project:moveFile', args),
   getTimeline: (args) => ipcRenderer.invoke('project:timeline', args),
+  // sessions: one file can hold several conversations
+  listChatsForFile: (args) => ipcRenderer.invoke('project:listChatsForFile', args),
+  newChat: (args) => ipcRenderer.invoke('project:newChat', args),
+  switchChat: (args) => ipcRenderer.invoke('project:switchChat', args),
 }
 contextBridge.exposeInMainWorld('projectApi', projectApi)

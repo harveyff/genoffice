@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { platformShortcuts } from '@genoffice/i18n'
 import { SHAPE_GALLERY_GROUPS, ShapePreview, useDismissablePopover } from '@genoffice/ui'
+import { SHAPE_GALLERY_GROUPS, ShapePreview } from '@genoffice/ui'
+import type { AiSettings } from '@genoffice/ai-provider'
+import type { ChatMeta } from '@genoffice/project-store'
 
 import {
   CaretIcon,
   GensparkMark,
   RIBBON_GLYPH_ICONS,
   RedoIcon,
+  SaveAsIcon,
   SaveIcon,
   UndoIcon,
 } from './ribbon-icons'
@@ -18,7 +22,7 @@ import { GoToDialog } from './GoToDialog'
 import { COLOR_SCHEMES, FONT_SCHEMES, THEME_PRESETS } from './themes'
 import { useI18n, type StringKey } from './i18n/locale'
 import { NameManagerDialog, type DefinedNameAction, type DefinedNameRow } from './NameManagerDialog'
-import { categoryOptionForPattern, NUMBER_FORMAT_CATEGORIES } from './number-format'
+import { categoryOptionForPattern, numberFormatCategories } from './number-format'
 import { type SelectionFormat } from './selection-format'
 import { fontFamilyGroups, useSystemFontFamilies } from './system-fonts'
 
@@ -165,6 +169,14 @@ interface ExcelShellProps {
   readonly onSend: (instruction?: string, attachments?: readonly AttachmentMeta[]) => void
   readonly onStop: () => void
   readonly onNewChat: () => void
+  readonly onUndo: (steps?: number) => void
+  /** this workbook's stored conversations, newest first */
+  readonly onListSessions: () => Promise<ChatMeta[]>
+  /** current AI settings, and the switch, for the sidebar model picker */
+  readonly onListModels: () => Promise<AiSettings | null>
+  readonly onSelectModel: (profileId: string | null) => Promise<AiSettings | null>
+  readonly onLoadSession: (chatId: string) => void
+  readonly activeChatId: string | null
   readonly onUndo: () => void
   readonly onCommand: (command: string) => void
   /// Left side of the status bar (ready / streaming / AI progress messages).
@@ -174,6 +186,10 @@ interface ExcelShellProps {
   /// True when the edit journal has unsaved changes (enables the QAT Save).
   readonly canSave: boolean
   readonly onSave: () => void
+  /// Save As remains available for a clean workbook, but requires a real
+  /// file-backed session (the in-memory demo workbook has nowhere to copy).
+  readonly canSaveAs: boolean
+  readonly onSaveAs: () => void
   /// QAT redo (workbook history, same path as the app menu's ⇧⌘Z); undo
   /// shares the AI panel's onUndo above.
   readonly onRedo: () => void
@@ -304,12 +320,19 @@ export function ExcelShell({
   onSend,
   onStop,
   onNewChat,
+  onListSessions,
+  onListModels,
+  onSelectModel,
+  onLoadSession,
+  activeChatId,
   onUndo,
   onCommand,
   statusMessage,
   zoomPercent,
   canSave,
   onSave,
+  canSaveAs,
+  onSaveAs,
   onRedo,
   canUndo,
   canRedo,
@@ -322,7 +345,13 @@ export function ExcelShell({
 }: ExcelShellProps): React.JSX.Element {
   const { t } = useI18n()
   const [activeTab, setActiveTab] = useState<RibbonTab>('Home')
-  const [isCopilotOpen, setIsCopilotOpen] = useState(true)
+  // Persisted so a closed AI panel stays closed on next launch (docs/slides parity)
+  const [isCopilotOpen, setIsCopilotOpen] = useState(
+    () => localStorage.getItem('ai-sheets-show-ai') !== '0',
+  )
+  useEffect(() => {
+    localStorage.setItem('ai-sheets-show-ai', isCopilotOpen ? '1' : '0')
+  }, [isCopilotOpen])
   const [showFormatCells, setShowFormatCells] = useState(false)
   const [axisSizeTarget, setAxisSizeTarget] = useState<'row' | 'col' | null>(null)
   const [showLinkDialog, setShowLinkDialog] = useState(false)
@@ -368,6 +397,7 @@ export function ExcelShell({
   const visibleTabs: readonly RibbonTab[] = selectedChart
     ? [...ribbonTabs, 'Chart Design']
     : ribbonTabs
+  const saveAsTitle = `${t('appSaveAs')} (${platformShortcuts('⇧⌘S')})`
 
   return (
     <main className={`app-shell ${isCopilotOpen ? '' : 'copilot-collapsed'}`}>
@@ -389,10 +419,20 @@ export function ExcelShell({
           <button
             type="button"
             className="qa-btn"
+            data-tip={saveAsTitle}
+            aria-label={saveAsTitle}
+            disabled={!canSaveAs}
+            onClick={onSaveAs}
+          >
+            <SaveAsIcon />
+          </button>
+          <button
+            type="button"
+            className="qa-btn"
             data-tip={t('appUndo')}
             aria-label={t('appUndo')}
             disabled={!canUndo}
-            onClick={onUndo}
+            onClick={() => onUndo()}
           >
             <UndoIcon />
           </button>
@@ -511,6 +551,11 @@ export function ExcelShell({
           onSend={onSend}
           onStop={onStop}
           onNewChat={onNewChat}
+          onListSessions={onListSessions}
+          onListModels={onListModels}
+          onSelectModel={onSelectModel}
+          onLoadSession={onLoadSession}
+          activeChatId={activeChatId}
           onUndo={onUndo}
           onExpand={() => setIsCopilotOpen(true)}
           onCollapse={() => setIsCopilotOpen(false)}
@@ -3202,12 +3247,12 @@ function NumberFormatSelect({
       data-tip={pattern || t('dlgFcNumGeneral')}
       value={current}
       display={localized(current)}
-      options={NUMBER_FORMAT_CATEGORIES.map((category) => ({
+      options={numberFormatCategories().map((category) => ({
         value: category.label,
         label: localized(category.label),
       }))}
       onPick={(value) => {
-        const category = NUMBER_FORMAT_CATEGORIES.find((candidate) => candidate.label === value)
+        const category = numberFormatCategories().find((candidate) => candidate.label === value)
         if (category) onCommand(`format:${category.pattern}`)
       }}
     />

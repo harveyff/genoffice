@@ -5,8 +5,11 @@ export const PDF_CHANNELS = {
   consumePending: 'pdf:consume-pending',
   readFile: 'pdf:read-file',
   save: 'pdf:save',
+  autoRename: 'pdf:auto-rename',
+  isUntitled: 'pdf:is-untitled',
   validateTextEdits: 'pdf:validate-text-edits',
   listEditFonts: 'pdf:list-edit-fonts',
+  canDrawText: 'pdf:can-draw-text',
   listPageImages: 'pdf:list-page-images',
   listStaticFormFills: 'pdf:list-static-form-fills',
   pageImagePng: 'pdf:page-image-png',
@@ -461,6 +464,13 @@ export interface TextInsertFailure {
   reason: string
 }
 
+/** Answer to autoRename; `path`/`name` present when renamed */
+export interface PdfAutoRenameResult {
+  renamed: boolean
+  path?: string
+  name?: string
+}
+
 export type SavePdfResult =
   | {
       ok: true
@@ -608,6 +618,10 @@ export const AI_CHANNELS = {
   streamCancel: 'ai:stream-cancel',
   imageSearch: 'ai:image-search',
   fetchImage: 'ai:fetch-image',
+  browsePage: 'ai:browse-page',
+  extractPages: 'ai:extract-pages',
+  instructionsPrompt: 'ai:instructions-prompt',
+  skillBody: 'ai:skill-body',
 } as const
 
 export interface ImageSearchResponse {
@@ -632,10 +646,20 @@ export interface PdfApi {
   readFile(path: string): Promise<ArrayBuffer>
   /** Write markups/form values/page ops back to the original file (pdf-lib, content streams untouched); path grants same as readFile. With targetPath set (Save As), the original is only read and the result goes to targetPath */
   save(request: SavePdfRequest): Promise<SavePdfResult>
+  /** Content-derived naming (docs/sheets analog): propose a file base name after a save.
+      The main process renames only while the file still carries the shell's auto-created
+      untitled name, so user-chosen names are never touched. */
+  autoRename(path: string, baseName: string): Promise<PdfAutoRenameResult>
+  /** Whether the file is a shell-created blank still carrying its untitled name
+      (gates the after-AI-run silent save; a PDF the user merely opened must never auto-write) */
+  isUntitled(path: string): Promise<boolean>
   /** Dry-run match of pending text edits against the file: reason null = would apply */
   validateTextEdits(request: ValidateTextEditsRequest): Promise<TextEditValidation[]>
   /** EDIT_FONTS ids whose font file exists on this machine */
   listEditFonts(): Promise<string[]>
+  /** Whether any embeddable font on this machine can draw `text` (insert-time gate:
+      the preview renders with browser fallback, which proves nothing about save) */
+  canDrawText(text: string, font?: string, bold?: boolean, italic?: boolean): Promise<boolean>
   /** Enumerate the content-stream images of every page (for image edit mode) */
   listPageImages(path: string): Promise<PageImageRef[]>
   /** Read GenOffice static-fill metadata stored inside the PDF. */
@@ -699,6 +723,39 @@ export interface PdfApi {
   /** press on the shell chrome (tab strip is a sibling WebContentsView whose
    *  clicks produce no DOM event here) — dismiss open popovers */
   onChromePressed(handler: () => void): () => void
+  /** Render a URL in the built-in browser and return its text (agent browse_page) */
+  aiBrowsePage(
+    url: string,
+    opts?: { includeLinks?: boolean },
+  ): Promise<{
+    ok: boolean
+    error?: string
+    page?: {
+      url: string
+      title: string
+      text: string
+      truncated: boolean
+      links?: Array<{ text: string; href: string }>
+    }
+  }>
+  /** Fetch pages as markdown via Tavily (agent extract_pages) */
+  aiExtractPages(
+    urls: string[],
+    advanced?: boolean,
+  ): Promise<{
+    ok: boolean
+    error?: string
+    pages?: Array<{ url: string; title: string; content: string }>
+    failed?: string[]
+  }>
+  /** User rules + skill catalogue for this surface, assembled in main */
+  aiInstructionsPrompt(surface: string): Promise<string>
+  /** Body of one user skill, scope-checked for this surface (agent load_skill) */
+  aiSkillBody(surface: string, id: string): Promise<string>
+  /** record a preference; false when the text was not worth storing */
+  aiRemember(text: string): Promise<boolean>
+  /** drop a recorded preference by exact wording; false when nothing matched */
+  aiForget(text: string): Promise<boolean>
   getAiSettings(): Promise<AiSettings>
   aiStream(request: AiStreamRequest): Promise<void>
   aiStreamCancel(requestId: string): Promise<void>

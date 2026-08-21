@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent, ReactElement } from 'react'
-import { AgentLoop } from '@genoffice/agent-core'
+import { AgentLoop, composeSkills } from '@genoffice/agent-core'
 import type { AiSettings } from '@genoffice/ai-provider'
 import { AiComposer, AiTypingIndicator } from '@genoffice/ui'
 import { aiLangDirective, t as tGlobal, useI18n } from '../i18n/locale'
@@ -8,6 +8,7 @@ import { Markdown } from '@genoffice/ui'
 import sendEnterOn from '../assets/send-enter-on.png'
 import sendEnterOff from '../assets/send-enter-off.png'
 import sendStop from '../assets/send-stop.png'
+import { createAppWebSkill } from './web-skill'
 import { createPdfSkill } from './pdf-skill'
 import { createElectronTransport } from './transport'
 import type { PdfAiDeps } from './tools'
@@ -55,11 +56,14 @@ export function AiPanel({
   api,
   onCollapse,
   preset,
+  onRunDone,
 }: {
   api: PdfAiDeps
   onCollapse: () => void
   /** Ribbon AI buttons push a one-shot prompt; a new nonce triggers an auto-run */
   preset?: { text: string; nonce: number } | null
+  /** Fired when a run that mutated the document finishes (drives the untitled-blank auto-save) */
+  onRunDone?: () => void
 }): ReactElement {
   const { lang, t } = useI18n()
   const [chat, setChat] = useState<ChatEntry[]>([])
@@ -87,6 +91,10 @@ export function AiPanel({
   langRef.current = lang
   const apiRef = useRef(api)
   apiRef.current = api
+  const onRunDoneRef = useRef(onRunDone)
+  onRunDoneRef.current = onRunDone
+  /** Any tool in the current run reported mutated: true */
+  const runMutatedRef = useRef(false)
 
   const patchLast = (patch: Partial<ChatEntry> | ((last: ChatEntry) => Partial<ChatEntry>)) => {
     setChat((prev) => {
@@ -99,6 +107,11 @@ export function AiPanel({
   }
 
   // The loop is built once; every mutable value goes through a ref getter
+  // browse / extract / load_skill, plus the user's rules and skill catalogue
+  // lazily, once: useRef(fn()) would rebuild the adapter and refire its IPC
+  // on every render
+  const webSkillRef = useRef<ReturnType<typeof createAppWebSkill> | null>(null)
+  webSkillRef.current ??= createAppWebSkill()
   const loopRef = useRef<AgentLoop | null>(null)
   if (!loopRef.current) {
     const deps: PdfAiDeps = {
@@ -113,6 +126,7 @@ export function AiPanel({
       gotoPage: (p) => apiRef.current.gotoPage(p),
       addMarkup: (type, idx, rects) => apiRef.current.addMarkup(type, idx, rects),
       editText: (input) => apiRef.current.editText(input),
+      insertText: (input) => apiRef.current.insertText(input),
       editFonts: () => apiRef.current.editFonts(),
       formEdits: () => apiRef.current.formEdits(),
       applyFormEdit: (v) => apiRef.current.applyFormEdit(v),
@@ -132,7 +146,7 @@ export function AiPanel({
     }
     loopRef.current = new AgentLoop({
       transport: createElectronTransport(() => settingsRef.current!),
-      skill: createPdfSkill(deps),
+      skill: composeSkills('pdf+web', '', [webSkillRef.current!.skill, createPdfSkill(deps)]),
       systemSuffix: () => aiLangDirective(langRef.current),
       events: {
         onText: (text) => {
@@ -141,6 +155,7 @@ export function AiPanel({
         },
         onToolExecuted: ({ call, execution }) => {
           setPhase('working')
+          if (execution.mutated) runMutatedRef.current = true
           patchLast((last) => ({
             tools: [
               ...(last.tools ?? []),
@@ -167,6 +182,10 @@ export function AiPanel({
             text: final || (last.tools?.length ? last.text : tGlobal('aiNoReply')),
           }))
           setBusy(false)
+          if (runMutatedRef.current) {
+            runMutatedRef.current = false
+            onRunDoneRef.current?.()
+          }
         },
         onError: (error) => {
           setChat((prev) => {
@@ -216,6 +235,7 @@ export function AiPanel({
     setPrompt('')
     setBusy(true)
     setPhase('thinking')
+    runMutatedRef.current = false
     void (async () => {
       try {
         settingsRef.current = await window.pdfApi.getAiSettings()

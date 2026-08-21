@@ -31,6 +31,8 @@ export type SaveMode = 'save' | 'saveAs'
 export interface SaveMarkdownRequest {
   /** full document text (frontmatter included) */
   text: string
+  /** Authored image paths in document order; the main process validates every path. */
+  imageSources: string[]
   mode: SaveMode
   /**
    * Silent first save for an untitled document (AI auto-naming): saves to a
@@ -41,7 +43,14 @@ export interface SaveMarkdownRequest {
 }
 
 export type SaveMarkdownResult =
-  { ok: true; path: string } | { ok: true; canceled: true } | { ok: false; error: string }
+  | {
+      ok: true
+      path: string
+      /** Save As may relocate local images into the new document's assets directory. */
+      imageRewrites?: Array<{ from: string; to: string }>
+    }
+  | { ok: true; canceled: true }
+  | { ok: false; error: string }
 
 /** AI channels are app-wide shared ipcMain handlers (shell registers via docs-main registerAiIpc); pass-through only */
 export const AI_CHANNELS = {
@@ -64,7 +73,7 @@ export interface ExportDocxRequest {
   base64: string
   /** file name (no extension) suggested in the dialog / used for the silent convert */
   suggestedName: string
-  /** 'dialog' = save dialog; 'openInDocs' = silent save next to the .md, then open in AI Docs */
+  /** 'dialog' = save dialog; 'openInDocs' = app-managed temporary copy opened in AI Docs */
   mode: 'dialog' | 'openInDocs'
 }
 
@@ -135,6 +144,8 @@ export interface MarkdownApi {
    *  clicks produce no DOM event here) — dismiss open popovers */
   onChromePressed(handler: () => void): () => void
   getAiSettings(): Promise<AiSettings>
+  /** Switch the live model; null selects the Genspark account. Returns the settled settings. */
+  setActiveModel(profileId: string | null): Promise<AiSettings>
   aiStream(request: AiStreamRequest): Promise<void>
   aiStreamCancel(requestId: string): Promise<void>
   onAiStream(handler: (chunk: AiStreamChunk) => void): () => void
