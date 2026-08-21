@@ -3984,21 +3984,8 @@ async function performDocsClose(
   const state = await queryCloseState(contents)
   if (!state.dirty || contents.isDestroyed()) return true
   if (state.unresponsive) {
-    // No reply: saving through the renderer won't work either — offer Close Anyway / Cancel
-    const options = {
-      type: 'warning' as const,
-      message: tm('closeNoReplyMsg'),
-      detail: tm('closeNoReplyDetail'),
-      buttons: [tm('btnCloseAnyway'), tm('btnCancel')],
-      defaultId: 1,
-      cancelId: 1,
-      noLink: true,
-    }
-    const { response } =
-      parent && !parent.isDestroyed()
-        ? await dialog.showMessageBox(parent, options)
-        : await dialog.showMessageBox(options)
-    return response === 0
+    // Renderer never answered (blank/stuck tab). Native dialogs over KasmVNC freeze the UI.
+    return true
   }
   // autosave on (and has a path, already checked when the renderer reported): save silently and proceed; only prompt on failure
   if (state.autoSave && (await requestRendererSave(contents))) return true

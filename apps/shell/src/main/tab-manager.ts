@@ -151,6 +151,13 @@ export class TabManager {
     this.shellWindow.contentView.addChildView(view)
     view.setVisible(false)
     this.trackHtmlFullScreen(id, view)
+    const relayout = () => {
+      if (this.shellWindow.isDestroyed()) return
+      this.layout()
+      setImmediate(() => this.layout())
+    }
+    view.webContents.on('did-finish-load', relayout)
+    view.webContents.on('dom-ready', relayout)
     this.tabs.push({
       id,
       kind: 'docs',
@@ -159,6 +166,8 @@ export class TabManager {
       filePath: openPath,
     })
     this.activateTab(id)
+    setTimeout(relayout, 100)
+    setTimeout(relayout, 500)
     return id
   }
 
