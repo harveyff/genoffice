@@ -10,31 +10,26 @@ import {
 } from 'node:fs'
 import { copyFile, mkdir, readFile, readdir, stat, unlink } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import {
-  BrowserWindow,
-  Menu,
-  WebContentsView,
-  app,
-  dialog,
-  ipcMain,
-  session,
-  shell,
-} from 'electron'
-import { buildInstructionsPrompt, skillBodyForTool } from '@genoffice/agent-core'
-import type { AgentRules, AppSurface, UserSkill } from '@genoffice/agent-core'
+import { BrowserWindow, Menu, WebContentsView, app, dialog, ipcMain, net, shell } from 'electron'
+import type { AgentRules, UserMemory, UserSkill } from '@genoffice/agent-core'
 import {
   AgentInstructionsStore,
   appMenuLabels,
-  browsePage,
+  configuredDefaultSaveDir,
+  applyNetworkSettings,
+  bootstrapNetworkSettings as bootstrapNetworkSettingsIn,
   contextMenuLabels,
   fetchRemoteImage,
   installContextMenu,
   installNavigationGuard,
+  registerAgentToolIpc,
   safeExternalUrl,
   showOpenDialogWithMemory,
   showSaveDialogWithMemory,
+  toggleDevToolsItem,
   windowMenuTemplate,
 } from '@genoffice/electron-utils'
+import { configureMetricsCache, familyVerticalMetrics } from '@genoffice/font-metrics'
 import { createI18n, getUiLang, normalizeLang, setUiLang } from '@genoffice/i18n'
 import { ProjectStore } from '@genoffice/project-store'
 import type {
@@ -48,6 +43,7 @@ import { parseFileToText } from '@genoffice/file-parse'
 import {
   AiCreditsError,
   AiTimeoutError,
+  isAiNetworkError,
   activeProvider,
   applyModelSettings,
   chatForProvider,
@@ -55,7 +51,9 @@ import {
   isReasoningEffort,
   normalizeProxyUrl,
   resolveAiSettings,
+  setRescueFetch,
   streamForProvider,
+  syncActiveProfile,
   toModelSettings,
   type AiChatRequest,
   type AiChatResponse,
@@ -75,22 +73,38 @@ import {
   hasGskAuth,
   webSearch,
   imageSearch,
-  setGskProxyUrl,
-  setTavilyApiKey,
-  tavilyExtract,
 } from '@genoffice/ai-search'
 import type {
   AttachmentAddResult,
   AttachmentImageResult,
   AttachmentMeta,
   AttachmentReadResult,
+  DecryptOpenResult,
   DocsTabInfo,
   MenuCommand,
-  OpenFileResult,
+  OpenDocxResult,
 } from '../shared/ipc'
 import { ATTACHMENT_IMAGE_EXTS } from '../shared/ipc'
 import { findDocxPath } from '../shared/open-file'
 import { atomicWriteFile, looksLikeZip } from './atomic-write'
+import {
+  commitDocPasswordSave,
+  currentDocPasswordIntentRevision,
+  decryptDocx,
+  decryptRecoveryCopy,
+  discardDocPasswordIntents,
+  DocxDecryptError,
+  docPasswordFor,
+  encryptDocx,
+  forgetDocPasswords,
+  isEncryptedDocx,
+  markDiskEncrypted,
+  prepareRecoveryDocx,
+  rememberDocPassword,
+  renameDocPassword,
+  setDocPassword,
+  snapshotDocPassword,
+} from './docx-encryption'
 import { isExternallyModified, type DiskFileState } from './external-change'
 import { initDocsAutoUpdater } from './updater'
 
@@ -190,8 +204,7 @@ const tMain = createI18n({
     menuParagraph: '段落…',
     menuTools: '工具',
     menuWordCount: '字数统计…',
-    menuSpelling: '拼写和语法检查',
-    menuMacros: '宏',
+    menuAiProofread: 'AI 校对',
     menuWindow: '窗口',
     menuHelp: '帮助',
     menuDocsHelp: 'GenOffice Docs 帮助',
@@ -284,8 +297,7 @@ const tMain = createI18n({
     menuParagraph: 'Paragraph…',
     menuTools: 'Tools',
     menuWordCount: 'Word Count…',
-    menuSpelling: 'Spelling and Grammar',
-    menuMacros: 'Macros',
+    menuAiProofread: 'AI Proofread',
     menuWindow: 'Window',
     menuHelp: 'Help',
     menuDocsHelp: 'GenOffice Docs Help',
@@ -378,8 +390,7 @@ const tMain = createI18n({
     menuParagraph: '段落…',
     menuTools: 'ツール',
     menuWordCount: '文字カウント…',
-    menuSpelling: 'スペルチェックと文章校正',
-    menuMacros: 'マクロ',
+    menuAiProofread: 'AI 校正',
     menuWindow: 'ウィンドウ',
     menuHelp: 'ヘルプ',
     menuDocsHelp: 'GenOffice Docs ヘルプ',
@@ -473,8 +484,7 @@ const tMain = createI18n({
     menuParagraph: '단락…',
     menuTools: '도구',
     menuWordCount: '단어 개수…',
-    menuSpelling: '맞춤법 및 문법 검사',
-    menuMacros: '매크로',
+    menuAiProofread: 'AI 교정',
     menuWindow: '창',
     menuHelp: '도움말',
     menuDocsHelp: 'GenOffice Docs 도움말',
@@ -569,8 +579,7 @@ const tMain = createI18n({
     menuParagraph: 'Paragraphe…',
     menuTools: 'Outils',
     menuWordCount: 'Statistiques…',
-    menuSpelling: 'Grammaire et orthographe',
-    menuMacros: 'Macros',
+    menuAiProofread: 'Relecture IA',
     menuWindow: 'Fenêtre',
     menuHelp: 'Aide',
     menuDocsHelp: 'Aide GenOffice Docs',
@@ -665,8 +674,7 @@ const tMain = createI18n({
     menuParagraph: 'Absatz…',
     menuTools: 'Extras',
     menuWordCount: 'Wörter zählen…',
-    menuSpelling: 'Rechtschreibung und Grammatik',
-    menuMacros: 'Makros',
+    menuAiProofread: 'KI-Korrektur',
     menuWindow: 'Fenster',
     menuHelp: 'Hilfe',
     menuDocsHelp: 'GenOffice Docs-Hilfe',
@@ -760,8 +768,7 @@ const tMain = createI18n({
     menuParagraph: 'Párrafo…',
     menuTools: 'Herramientas',
     menuWordCount: 'Contar palabras…',
-    menuSpelling: 'Ortografía y gramática',
-    menuMacros: 'Macros',
+    menuAiProofread: 'Corrección con IA',
     menuWindow: 'Ventana',
     menuHelp: 'Ayuda',
     menuDocsHelp: 'Ayuda de GenOffice Docs',
@@ -854,8 +861,7 @@ const tMain = createI18n({
     menuParagraph: 'ย่อหน้า…',
     menuTools: 'เครื่องมือ',
     menuWordCount: 'นับจำนวนคำ…',
-    menuSpelling: 'การสะกดและไวยากรณ์',
-    menuMacros: 'แมโคร',
+    menuAiProofread: 'พิสูจน์อักษรด้วย AI',
     menuWindow: 'หน้าต่าง',
     menuHelp: 'วิธีใช้',
     menuDocsHelp: 'วิธีใช้ GenOffice Docs',
@@ -948,8 +954,7 @@ const tMain = createI18n({
     menuParagraph: 'Paragraf…',
     menuTools: 'Alat',
     menuWordCount: 'Hitungan Kata…',
-    menuSpelling: 'Ejaan dan Tata Bahasa',
-    menuMacros: 'Makro',
+    menuAiProofread: 'Koreksi AI',
     menuWindow: 'Jendela',
     menuHelp: 'Bantuan',
     menuDocsHelp: 'Bantuan GenOffice Docs',
@@ -1043,8 +1048,7 @@ const tMain = createI18n({
     menuParagraph: 'Абзац…',
     menuTools: 'Сервис',
     menuWordCount: 'Статистика…',
-    menuSpelling: 'Правописание',
-    menuMacros: 'Макросы',
+    menuAiProofread: 'ИИ-корректура',
     menuWindow: 'Окно',
     menuHelp: 'Справка',
     menuDocsHelp: 'Справка GenOffice Docs',
@@ -1138,8 +1142,7 @@ const tMain = createI18n({
     menuParagraph: 'فقرة…',
     menuTools: 'أدوات',
     menuWordCount: 'عدد الكلمات…',
-    menuSpelling: 'تدقيق إملائي ونحوي',
-    menuMacros: 'وحدات الماكرو',
+    menuAiProofread: 'تدقيق بالذكاء الاصطناعي',
     menuWindow: 'نافذة',
     menuHelp: 'تعليمات',
     menuDocsHelp: 'تعليمات GenOffice Docs',
@@ -1233,8 +1236,7 @@ const tMain = createI18n({
     menuParagraph: 'Parágrafo…',
     menuTools: 'Ferramentas',
     menuWordCount: 'Contagem de Palavras…',
-    menuSpelling: 'Ortografia e Gramática',
-    menuMacros: 'Macros',
+    menuAiProofread: 'Revisão com IA',
     menuWindow: 'Janela',
     menuHelp: 'Ajuda',
     menuDocsHelp: 'Ajuda do GenOffice Docs',
@@ -1328,8 +1330,7 @@ const tMain = createI18n({
     menuParagraph: 'Paragrafo…',
     menuTools: 'Strumenti',
     menuWordCount: 'Conteggio parole…',
-    menuSpelling: 'Ortografia e grammatica',
-    menuMacros: 'Macro',
+    menuAiProofread: 'Correzione IA',
     menuWindow: 'Finestra',
     menuHelp: 'Aiuto',
     menuDocsHelp: 'Guida di GenOffice Docs',
@@ -1423,8 +1424,7 @@ const tMain = createI18n({
     menuParagraph: 'Akapit…',
     menuTools: 'Narzędzia',
     menuWordCount: 'Statystyka wyrazów…',
-    menuSpelling: 'Pisownia i gramatyka',
-    menuMacros: 'Makra',
+    menuAiProofread: 'Korekta AI',
     menuWindow: 'Okno',
     menuHelp: 'Pomoc',
     menuDocsHelp: 'Pomoc GenOffice Docs',
@@ -1518,8 +1518,7 @@ const tMain = createI18n({
     menuParagraph: 'Alinea…',
     menuTools: 'Extra',
     menuWordCount: 'Woorden tellen…',
-    menuSpelling: 'Spelling en grammatica',
-    menuMacros: "Macro's",
+    menuAiProofread: 'AI-proeflezen',
     menuWindow: 'Venster',
     menuHelp: 'Help',
     menuDocsHelp: 'GenOffice Docs Help',
@@ -1613,8 +1612,7 @@ const tMain = createI18n({
     menuParagraph: 'Perenggan…',
     menuTools: 'Alat',
     menuWordCount: 'Kiraan Perkataan…',
-    menuSpelling: 'Ejaan dan Tatabahasa',
-    menuMacros: 'Makro',
+    menuAiProofread: 'Pembacaan Pruf AI',
     menuWindow: 'Tetingkap',
     menuHelp: 'Bantuan',
     menuDocsHelp: 'Bantuan GenOffice Docs',
@@ -1706,8 +1704,7 @@ const tMain = createI18n({
     menuParagraph: 'פסקה…',
     menuTools: 'כלים',
     menuWordCount: 'ספירת מילים…',
-    menuSpelling: 'איות ודקדוק',
-    menuMacros: 'פקודות מאקרו',
+    menuAiProofread: 'הגהת AI',
     menuWindow: 'חלון',
     menuHelp: 'עזרה',
     menuDocsHelp: 'עזרה של GenOffice Docs',
@@ -1801,8 +1798,7 @@ const tMain = createI18n({
     menuParagraph: 'अनुच्छेद…',
     menuTools: 'उपकरण',
     menuWordCount: 'शब्द गणना…',
-    menuSpelling: 'वर्तनी और व्याकरण',
-    menuMacros: 'मैक्रो',
+    menuAiProofread: 'AI प्रूफ़रीडिंग',
     menuWindow: 'विंडो',
     menuHelp: 'सहायता',
     menuDocsHelp: 'GenOffice Docs सहायता',
@@ -1893,8 +1889,7 @@ const tMain = createI18n({
     menuParagraph: '段落…',
     menuTools: '工具',
     menuWordCount: '字數統計…',
-    menuSpelling: '拼字及文法檢查',
-    menuMacros: '巨集',
+    menuAiProofread: 'AI 校對',
     menuWindow: '視窗',
     menuHelp: '說明',
     menuDocsHelp: 'GenOffice Docs 說明',
@@ -1969,14 +1964,14 @@ async function openDialog(event: IpcMainInvokeEvent, options: OpenDialogOptions)
 }
 
 async function saveDialog(event: IpcMainInvokeEvent, options: SaveDialogOptions) {
-  return showSaveDialogWithMemory(dialog, dialogParent(event), options)
+  // before any pick is remembered, bare-name suggestions anchor in the
+  // configurable default save folder instead of Electron's Downloads pin
+  return showSaveDialogWithMemory(dialog, dialogParent(event), options, defaultSaveDir())
 }
 
-/** default folder where new files land on their first (silent) save; shared with the other editors via shell */
+/** default folder where new files land on their first (silent) save; shared with the other editors via shell. User-configurable (app-settings.json), falls back to <Documents>/GenOffice. */
 export function defaultSaveDir(): string {
-  const dir = join(app.getPath('documents'), 'GenOffice')
-  mkdirSync(dir, { recursive: true })
-  return dir
+  return configuredDefaultSaveDir(app)
 }
 
 /** first free path for fileName inside dir: name.ext, name-2.ext, name-3.ext… */
@@ -2074,6 +2069,9 @@ export function docsFileRenamed(wc: WebContents, oldPath: string, newPath: strin
     states.delete(oldPath)
     states.set(newPath, recorded)
   }
+  // an encrypted document's password must follow the path, or the next save
+  // finds no password under the new name and silently writes plaintext
+  renameDocPassword(wc.id, oldPath, newPath)
   wc.send('docs:renamed', { oldPath, newPath })
 }
 
@@ -2179,7 +2177,13 @@ function allowPdfWrite(wcId: number, filePath: string): void {
   pdfWritablePaths.set(wcId, set)
 }
 
+// Fidelity-harness escape hatch: headless runs have no save dialog to authorize
+// paths, so an explicitly configured directory (set only by our test scripts)
+// is treated as pre-authorized for PDF export.
+const testExportDir = process.env.GENOFFICE_TEST_EXPORT_DIR || null
+
 function canPdfWrite(wcId: number, filePath: string): boolean {
+  if (testExportDir && filePath.startsWith(testExportDir + '/')) return true
   return pdfWritablePaths.get(wcId)?.has(filePath) === true
 }
 
@@ -2241,6 +2245,7 @@ export function teardownDocsRenderer(contents: WebContents): void {
   docWritablePaths.delete(contents.id)
   pdfWritablePaths.delete(contents.id)
   docDiskStates.delete(contents.id)
+  forgetDocPasswords(contents.id)
   if (!contents.isDestroyed()) contents.send('docs:teardown')
 }
 
@@ -2263,21 +2268,30 @@ function clearRecoveryCopy(filePath: string): void {
   }
 }
 
+interface MaybeRecoveredDocBytes {
+  bytes: Buffer
+  recovered: boolean
+}
+
 /** On open, if a recovery copy newer than the original exists, ask whether to restore
  * (still points at the original path; only save persists it). */
-async function maybeRecoverDocBytes(filePath: string, original: Buffer): Promise<Buffer> {
+async function maybeRecoverDocBytes(
+  filePath: string,
+  original: Buffer,
+): Promise<MaybeRecoveredDocBytes> {
   const asPath = recoveryPathFor(filePath)
   try {
-    if (!existsSync(asPath)) return original
+    if (!existsSync(asPath)) return { bytes: original, recovered: false }
     if (statSync(asPath).mtimeMs <= statSync(filePath).mtimeMs) {
-      // a crashed partial write bumps mtime yet corrupts the file — keep the copy then
-      if (looksLikeZip(original)) {
+      // a crashed partial write bumps mtime yet corrupts the file — keep the copy
+      // then (an encrypted original is a CFB container, not a zip: intact too)
+      if (looksLikeZip(original) || isEncryptedDocx(original)) {
         unlinkSync(asPath)
-        return original
+        return { bytes: original, recovered: false }
       }
     }
   } catch {
-    return original
+    return { bytes: original, recovered: false }
   }
   const options = {
     type: 'question' as const,
@@ -2294,23 +2308,56 @@ async function maybeRecoverDocBytes(filePath: string, original: Buffer): Promise
       : await dialog.showMessageBox(options)
   if (r.response === 0) {
     try {
-      return await readFile(asPath)
+      return { bytes: await readFile(asPath), recovered: true }
     } catch {
-      return original
+      return { bytes: original, recovered: false }
     }
   }
   clearRecoveryCopy(filePath)
-  return original
+  return { bytes: original, recovered: false }
 }
 
-async function loadDocx(filePath: string, wcId: number): Promise<OpenFileResult | null> {
+async function loadDocx(
+  filePath: string,
+  wcId: number,
+  password?: string,
+): Promise<OpenDocxResult> {
   if (typeof filePath !== 'string' || !/\.docx$/i.test(filePath)) return null
   if (!existsSync(filePath)) return null
   const original = await readFile(filePath)
+  // Password-protected docx (ECMA-376 CFB container): without a password, hand
+  // back a marker — the renderer prompts and retries via docs:open-decrypt.
+  // No side effects (recents/write grant) until the password checks out.
+  let plainBytes: Buffer = original
+  const encrypted = isEncryptedDocx(original)
+  if (encrypted) {
+    const pwd = password ?? docPasswordFor(wcId, filePath)
+    if (!pwd) return { needsPassword: true, path: filePath, name: basename(filePath) }
+    plainBytes = await decryptDocx(original, pwd) // throws DocxDecryptError
+    rememberDocPassword(wcId, filePath, pwd)
+  } else {
+    rememberDocPassword(wcId, filePath, null)
+  }
+  // the archive keeps the on-disk original as-is (encrypted ones included: they
+  // reopen with the user's password), so a bad save never loses the source file
   const hash = await archiveOriginal(filePath, original)
-  const bytes = await maybeRecoverDocBytes(filePath, original)
+  const recovery = await maybeRecoverDocBytes(filePath, plainBytes)
+  let bytes = recovery.bytes
+  let recovered = recovery.recovered
+  // recovery copies of a protected document are themselves encrypted (see
+  // docs:write-recovery); an unreadable copy falls back to the original
+  if (encrypted && isEncryptedDocx(bytes)) {
+    try {
+      bytes = await decryptRecoveryCopy(wcId, filePath, bytes)
+    } catch {
+      bytes = plainBytes
+      recovered = false
+    }
+  }
   pushRecent(filePath)
   allowDocWrite(wcId, filePath)
+  if (fileOpenedHook) fileOpenedHook(wcId, filePath)
+  markDiskEncrypted(wcId, filePath, encrypted)
   // record the on-disk file, not the recovery copy: what matters is what save would overwrite
   await rememberDiskState(wcId, filePath, original)
   return {
@@ -2318,6 +2365,8 @@ async function loadDocx(filePath: string, wcId: number): Promise<OpenFileResult 
     name: basename(filePath),
     data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
     hash,
+    encrypted,
+    recovered: recovered || undefined,
   }
 }
 
@@ -2366,6 +2415,7 @@ const TEXT_EXTS = new Set([
 /** office/pdf formats get text extracted via @genoffice/file-parse; images skip extraction and go multimodal (files:read-image) */
 const ATTACHMENT_EXTS = new Set([
   ...TEXT_EXTS,
+  'doc',
   'docx',
   'pdf',
   'pptx',
@@ -2504,15 +2554,7 @@ function readAiSettings(): AiSettings {
   return settings
 }
 
-/**
- * Push the network-facing settings into the modules that hold them as process
- * state. Called on load and after every save so a settings change takes effect
- * without a restart, the same way the provider switch does.
- */
-export function applyNetworkSettings(settings: AiSettings): void {
-  setTavilyApiKey(settings.tavilyApiKey ?? '')
-  void applyProxy(settings.proxyUrl ?? '')
-}
+export { applyNetworkSettings, applyProxy, currentProxyUrl } from '@genoffice/electron-utils'
 
 /**
  * Load the persisted network settings at startup. Returns true when the user
@@ -2522,9 +2564,7 @@ export function applyNetworkSettings(settings: AiSettings): void {
  * proxy would otherwise be picked up.
  */
 export function bootstrapNetworkSettings(): boolean {
-  const settings = readAiSettings()
-  applyNetworkSettings(settings)
-  return !!normalizeProxyUrl(settings.proxyUrl)
+  return bootstrapNetworkSettingsIn(app.getPath('userData'))
 }
 
 /** file-backed rules + skills, shared by every editor module through this IPC */
@@ -2574,6 +2614,15 @@ export function saveAgentSkill(
   })
 }
 
+/** Memories the agent recorded, for the settings window to show and prune. */
+export function listAgentMemories(): UserMemory[] {
+  return instructions().readMemories()
+}
+
+export function deleteAgentMemory(id: string): boolean {
+  return instructions().deleteMemory(String(id ?? ''))
+}
+
 export function deleteAgentSkill(id: string): void {
   instructions().deleteSkill(String(id ?? ''))
 }
@@ -2619,54 +2668,6 @@ function needsApiKey(provider: AiProviderId): boolean {
   return provider !== 'custom'
 }
 
-/** last proxy handed to undici/Chromium, so a no-op save does not churn them */
-let appliedProxyUrl: string | null = null
-
-/**
- * Route outbound traffic through the user's proxy.
- *
- * Three consumers need telling separately, which is why this is not one call:
- * main-process `fetch` runs on undici and ignores the system proxy entirely;
- * Chromium sessions carry the renderer, sign-in window and the agent browser;
- * and the gsk CLI is a child process that only sees environment variables.
- *
- * An empty url restores direct connections, so clearing the field in the
- * dialog actually turns the proxy off rather than leaving the old one wired.
- */
-export async function applyProxy(rawUrl: string): Promise<void> {
-  const proxyUrl = normalizeProxyUrl(rawUrl)
-  if (proxyUrl === appliedProxyUrl) return
-  appliedProxyUrl = proxyUrl
-  setGskProxyUrl(proxyUrl)
-  try {
-    const { ProxyAgent, getGlobalDispatcher, setGlobalDispatcher, Agent } = await import('undici')
-    if (proxyUrl) {
-      setGlobalDispatcher(new ProxyAgent(proxyUrl))
-    } else if (getGlobalDispatcher() instanceof ProxyAgent) {
-      setGlobalDispatcher(new Agent())
-    }
-  } catch (err) {
-    console.warn('[proxy] failed to set undici dispatcher:', err)
-  }
-  try {
-    // proxyRules '' clears it; Chromium understands socks5:// here too
-    await session.defaultSession.setProxy(proxyUrl ? { proxyRules: proxyUrl } : { mode: 'system' })
-  } catch (err) {
-    console.warn('[proxy] failed to set session proxy:', err)
-  }
-  console.log(
-    proxyUrl
-      ? // strip user:pass before logging
-        `[proxy] outbound via ${proxyUrl.replace(/\/\/[^@/]*@/, '//***@')}`
-      : '[proxy] direct (system default)',
-  )
-}
-
-/** current proxy, for callers that need to pass it on (e.g. the agent browser) */
-export function currentProxyUrl(): string {
-  return appliedProxyUrl ?? ''
-}
-
 /** a finite number inside [min, max], else null ("not set") */
 function boundedNumber(value: unknown, min: number, max: number): number | null {
   const n = typeof value === 'number' ? value : Number(value)
@@ -2678,6 +2679,19 @@ function boundedNumber(value: unknown, min: number, max: number): number | null 
 function sanitizeModelSettings(input: Partial<AiModelSettings> | undefined): AiModelSettings {
   return {
     mode: input?.mode === 'custom' ? 'custom' : 'genspark',
+    // the library the dialog now has: unknown ids are dropped rather than
+    // trusted, and a blank label falls back to the model when it is stored
+    profiles: (Array.isArray(input?.profiles) ? (input.profiles as unknown[]) : [])
+      .filter((p): p is Record<string, unknown> => !!p && typeof p === 'object')
+      .map((p) => ({
+        id: String(p.id ?? ''),
+        label: String(p.label ?? ''),
+        baseUrl: String(p.baseUrl ?? ''),
+        model: String(p.model ?? ''),
+        apiKey: String(p.apiKey ?? ''),
+      }))
+      .filter((p) => p.id !== ''),
+    profileId: typeof input?.profileId === 'string' ? input.profileId : null,
     baseUrl: String(input?.baseUrl ?? ''),
     model: String(input?.model ?? ''),
     apiKey: String(input?.apiKey ?? ''),
@@ -2718,6 +2732,26 @@ export function registerAiIpc(): void {
 
   ipcMain.handle('ai:set-settings', (_event, settings: AiSettings) => {
     writeJson(SETTINGS_PATH(), settings)
+  })
+
+  /**
+   * Switch the live model from the AI sidebar. A null profileId means the
+   * Genspark account. The file is re-read here rather than trusting a renderer
+   * snapshot, so two panels switching at once cannot clobber each other's
+   * unrelated settings — and because every request re-reads the file, the
+   * switch reaches tabs that are already open.
+   */
+  ipcMain.handle('ai:set-active-model', (_event, profileId: unknown): AiSettings => {
+    const current = readAiSettings()
+    const id = typeof profileId === 'string' ? profileId : null
+    const next = syncActiveProfile({
+      ...current,
+      provider: id ? 'custom' : 'genspark',
+      ...(id ? { activeProfileId: id } : {}),
+    })
+    next.provider = activeProvider(next)
+    writeJson(SETTINGS_PATH(), next)
+    return next
   })
 
   // Flat read/write pair for the settings dialog. One file, one selection —
@@ -2782,50 +2816,10 @@ export function registerAiIpc(): void {
     instructions().deleteSkill(String(id ?? ''))
   })
 
-  /**
-   * Prompt section for one surface, assembled in main so every editor gets the
-   * same scope filtering rather than each renderer reimplementing it. Read at
-   * the start of a turn, so an edit in the settings window applies to the next
-   * message without reopening the document.
-   */
-  ipcMain.handle('ai:instructions-prompt', (_event, surface: AppSurface): string =>
-    buildInstructionsPrompt(instructions().readRules(), instructions().listSkills(), surface),
-  )
-
-  /** backs the load_skill tool: the body, only if that skill is in scope here */
-  ipcMain.handle('ai:skill-body', (_event, surface: AppSurface, id: string): string =>
-    skillBodyForTool(instructions().listSkills(), surface, String(id ?? '')),
-  )
-
-  // ── agent browsing + page extraction ─────────────────────────────
-
-  ipcMain.handle(
-    'ai:browse-page',
-    async (_event, url: string, opts?: { maxChars?: number; includeLinks?: boolean }) => {
-      try {
-        const page = await browsePage(url, {
-          ...(opts?.maxChars ? { maxChars: opts.maxChars } : {}),
-          includeLinks: opts?.includeLinks === true,
-          proxyUrl: currentProxyUrl(),
-        })
-        return { ok: true as const, page }
-      } catch (err) {
-        return { ok: false as const, error: err instanceof Error ? err.message : String(err) }
-      }
-    },
-  )
-
-  /** Tavily's server-side extraction: cheaper than browsing and beats bot walls */
-  ipcMain.handle('ai:extract-pages', async (_event, urls: string[], advanced?: boolean) => {
-    try {
-      const result = await tavilyExtract(Array.isArray(urls) ? urls.map(String) : [], {
-        advanced: advanced === true,
-      })
-      return { ok: true as const, ...result }
-    } catch (err) {
-      return { ok: false as const, error: err instanceof Error ? err.message : String(err) }
-    }
-  })
+  // instructions-prompt, skill-body, remember, forget, capture-page,
+  // browse-page and extract-pages: the agent's own tool backends, shared with
+  // the standalone slides and sheets processes rather than living only here.
+  registerAgentToolIpc(instructions)
 
   ipcMain.handle('ai:stream', async (event, request: AiStreamRequest) => {
     const { requestId, system, messages } = request
@@ -2881,7 +2875,9 @@ export function registerAiIpc(): void {
             ? { errorCode: 'timeout' as const }
             : err instanceof AiCreditsError
               ? { errorCode: 'credits' as const }
-              : {}),
+              : isAiNetworkError(err)
+                ? { errorCode: 'network' as const }
+                : {}),
         })
       }
     } finally {
@@ -3003,6 +2999,19 @@ function notifyFileSaved(wc: WebContents, filePath: string): void {
 }
 
 /**
+ * Fired when a docx is opened INSIDE an existing tab (File > Open dialog or an
+ * explicit path open). Sheets and slides have had this hook from the start;
+ * docs only synced the tab on save-as/first-save, so a file opened into an
+ * untitled tab kept the "Untitled Document" tab title until a save landed on a
+ * NEW path — which a plain Ctrl+S to the original file never does (r115).
+ */
+let fileOpenedHook: ((wcId: number, filePath: string) => void) | null = null
+
+export function setDocsFileOpenedHook(hook: (wcId: number, filePath: string) => void): void {
+  fileOpenedHook = hook
+}
+
+/**
  * Reverse lookup from a sheets sessionId to its file path. In shell mode the
  * project:* handlers are registered by this file, but only sheets-main knows the
  * sessionId mapping; the shell injects it at startup (standalone docs doesn't need it).
@@ -3032,16 +3041,25 @@ export function registerProjectIpc(): void {
   if (projectIpcRegistered) return
   projectIpcRegistered = true
 
+  /** The file a chat request is about; sheets has no path in the renderer and passes sessionId instead */
+  const chatFilePath = (
+    event: Electron.IpcMainInvokeEvent,
+    args: { filePath?: string | null; sessionId?: string },
+  ): string | null => {
+    if (args.filePath) return args.filePath
+    if (args.sessionId && sessionPathResolver) {
+      return sessionPathResolver(event.sender.id, args.sessionId)
+    }
+    return null
+  }
+
   /** Resolve projectId + chatId from a file path (sheets without a path resolves via sessionId) */
   ipcMain.handle(
     'project:resolveChat',
     (event, args: { filePath: string | null; tempChatId?: string; sessionId?: string }) => {
       const store = getProjectStore()
       store.ensureDefaultProject()
-      let resolvedPath = args.filePath
-      if (!resolvedPath && args.sessionId && sessionPathResolver) {
-        resolvedPath = sessionPathResolver(event.sender.id, args.sessionId)
-      }
+      const resolvedPath = chatFilePath(event, args)
       if (!resolvedPath) {
         return {
           projectId: 'default',
@@ -3164,13 +3182,67 @@ export function registerProjectIpc(): void {
   ipcMain.handle('project:timeline', (_event, args: { projectId: string; limit?: number }) => {
     return getProjectStore().getProjectTimeline(args.projectId, args.limit ?? 20)
   })
+
+  // ── sessions: one file can hold several conversations ──
+  // An unsaved file has no path to key sessions on, so these return the empty
+  // list / the current chat rather than inventing a session the store cannot
+  // find again after the first save.
+
+  /** Every conversation belonging to one file, oldest first */
+  ipcMain.handle(
+    'project:listChatsForFile',
+    (event, args: { filePath?: string | null; sessionId?: string }) => {
+      const resolvedPath = chatFilePath(event, args)
+      if (!resolvedPath) return []
+      const store = getProjectStore()
+      store.ensureDefaultProject()
+      return store.listChatsForFile(resolvedPath)
+    },
+  )
+
+  /** Start a fresh conversation for a file and make it the active one */
+  ipcMain.handle(
+    'project:newChat',
+    (event, args: { filePath?: string | null; sessionId?: string; tempChatId?: string }) => {
+      const resolvedPath = chatFilePath(event, args)
+      const store = getProjectStore()
+      store.ensureDefaultProject()
+      if (!resolvedPath) {
+        return { projectId: 'default', chatId: args.tempChatId ?? `unsaved-${Date.now()}` }
+      }
+      return store.newChatForFile(resolvedPath)
+    },
+  )
+
+  /** Load an earlier conversation by making it active again */
+  ipcMain.handle(
+    'project:switchChat',
+    (event, args: { filePath?: string | null; sessionId?: string; chatId: string }) => {
+      const resolvedPath = chatFilePath(event, args)
+      const store = getProjectStore()
+      store.ensureDefaultProject()
+      if (!resolvedPath) return { projectId: 'default', chatId: args.chatId }
+      // a stale renderer may name a chat this file no longer owns: fall back to
+      // whatever is active rather than pointing it at someone else's history
+      store.setActiveChatForFile(resolvedPath, args.chatId)
+      return store.resolveChatForFile(resolvedPath)
+    },
+  )
 }
 
 /** document/attachment/window IPC (everything except the AI proxy above) */
 export function registerDocsIpc(): void {
+  // Node fetch (undici) direct connections get reset under VPN/tun setups; retry over Chromium's stack
+  setRescueFetch((url, init) => net.fetch(url, init))
+
   // shared with the other editor modules — last (identical) registration wins
   ipcMain.removeHandler('app:get-language')
   ipcMain.handle('app:get-language', () => getUiLang())
+
+  configureMetricsCache(userDataPath('font-metrics'))
+  ipcMain.handle('docs:font-metrics', (_event, family: string) =>
+    typeof family === 'string' ? familyVerticalMetrics(family) : null,
+  )
 
   ipcMain.handle('docs:open', async (event) => {
     const result = await openDialog(event, {
@@ -3183,6 +3255,66 @@ export function registerDocsIpc(): void {
   })
 
   ipcMain.handle('docs:open-path', (event, filePath: string) => loadDocx(filePath, event.sender.id))
+
+  // Review > Protect > Encrypt with Password: set/clear the open password.
+  // Takes effect on the next save (docs:save / save-as / save-new all consult the store).
+  ipcMain.handle(
+    'docs:set-password',
+    (event, filePath: string | null, password: string | null): { ok: boolean } => {
+      if (tornDownWcIds.has(event.sender.id)) return { ok: false }
+      if (filePath !== null && typeof filePath !== 'string') return { ok: false }
+      if (password !== null && (typeof password !== 'string' || password.length === 0)) {
+        return { ok: false }
+      }
+      // only the document this renderer legitimately has open (same grant as saving)
+      if (filePath && !canDocWrite(event.sender.id, filePath)) return { ok: false }
+      setDocPassword(event.sender.id, filePath, password)
+      return { ok: true }
+    },
+  )
+
+  ipcMain.handle('docs:password-intent-revision', (event): number => {
+    if (tornDownWcIds.has(event.sender.id)) return -1
+    return currentDocPasswordIntentRevision()
+  })
+
+  ipcMain.handle(
+    'docs:discard-password-intents',
+    (event, throughRevision: unknown): { ok: boolean } => {
+      if (tornDownWcIds.has(event.sender.id)) return { ok: false }
+      if (
+        typeof throughRevision !== 'number' ||
+        !Number.isSafeInteger(throughRevision) ||
+        throughRevision < 0
+      ) {
+        return { ok: false }
+      }
+      discardDocPasswordIntents(event.sender.id, throughRevision)
+      return { ok: true }
+    },
+  )
+
+  // decrypt-and-open a password-protected docx; wrong-password keeps the renderer's prompt open
+  ipcMain.handle(
+    'docs:open-decrypt',
+    async (event, filePath: string, password: string): Promise<DecryptOpenResult> => {
+      if (typeof filePath !== 'string' || typeof password !== 'string' || password.length === 0) {
+        return { ok: false, reason: 'error', error: 'invalid arguments' }
+      }
+      try {
+        const result = await loadDocx(filePath, event.sender.id, password)
+        if (!result) return { ok: false, reason: 'error', error: 'file not found' }
+        // the file was swapped for a plain docx between prompt and submit — still an open
+        if ('needsPassword' in result) return { ok: false, reason: 'error', error: 'not encrypted' }
+        return { ok: true, result }
+      } catch (err) {
+        if (err instanceof DocxDecryptError) {
+          return { ok: false, reason: err.reason, error: err.message }
+        }
+        return { ok: false, reason: 'error', error: String(err) }
+      }
+    },
+  )
 
   ipcMain.handle('docs:consume-pending-open', (event) => {
     rendererReady = true
@@ -3241,12 +3373,32 @@ export function registerDocsIpc(): void {
         if (tornDownWcIds.has(event.sender.id) || !canDocWrite(event.sender.id, filePath)) {
           return { ok: false, error: 'save target is not an opened document' }
         }
-        const bytes = Buffer.from(data)
+        // Snapshot desired state: the disk password remains unchanged until the
+        // atomic write succeeds, and a newer ribbon intent survives this save.
+        const passwordState = snapshotDocPassword(event.sender.id, filePath)
+        const bytes = passwordState.password
+          ? encryptDocx(Buffer.from(data), passwordState.password)
+          : Buffer.from(data)
         await atomicWriteFile(filePath, bytes)
+        // Teardown may have cleared all in-memory secrets while the atomic
+        // write was pending. Never resurrect state for an orphaned renderer.
+        if (tornDownWcIds.has(event.sender.id)) {
+          return { ok: false, error: 'save target is not an opened document' }
+        }
         await rememberDiskState(event.sender.id, filePath, bytes)
+        if (tornDownWcIds.has(event.sender.id)) {
+          return { ok: false, error: 'save target is not an opened document' }
+        }
+        // Commit immediately after the final await: intents received during
+        // post-write bookkeeping are included, with no later async race.
+        const passwordIntentPending = commitDocPasswordSave(
+          event.sender.id,
+          passwordState,
+          filePath,
+        )
         clearRecoveryCopy(filePath)
         pushRecent(filePath)
-        return { ok: true }
+        return { ok: true, passwordIntentPending }
       } catch (err) {
         return { ok: false, error: String(err) }
       }
@@ -3263,7 +3415,12 @@ export function registerDocsIpc(): void {
       // copy while this write is in flight bumps the epoch and invalidates it
       const epoch = recoveryClearEpochs.get(filePath) ?? 0
       await mkdir(recoveryDir(), { recursive: true })
-      await atomicWriteFile(recoveryPathFor(filePath), Buffer.from(data))
+      // Recovery follows the current disk state, never the desired next-save
+      // password. Missing state for an encrypted disk file skips the tick so
+      // plaintext can never be written as its recovery copy.
+      const bytes = prepareRecoveryDocx(event.sender.id, filePath, Buffer.from(data))
+      if (!bytes) return { ok: false }
+      await atomicWriteFile(recoveryPathFor(filePath), bytes)
       // The tab may have been closed ("Don't Save" clears the copy, teardown
       // revokes access) or the document saved (docs:save clears the copy) while
       // the write was in flight. A write that lost either race would offer
@@ -3282,30 +3439,46 @@ export function registerDocsIpc(): void {
     }
   })
 
-  ipcMain.handle('docs:save-as', async (event, defaultName: string, data: ArrayBuffer) => {
-    // an orphaned (closed-tab) renderer must not open dialogs or land new files
-    if (tornDownWcIds.has(event.sender.id)) return { ok: false }
-    const result = await saveDialog(event, {
-      title: tm('dlgSaveAs'),
-      defaultPath: defaultName,
-      filters: [{ name: tm('filterWord'), extensions: ['docx'] }],
-    })
-    if (result.canceled || !result.filePath) return { ok: false }
-    // the tab may have been closed while the dialog was open; checked before the
-    // write because Save As may overwrite an existing file (no safe rollback)
-    if (tornDownWcIds.has(event.sender.id)) return { ok: false }
-    try {
-      const bytes = Buffer.from(data)
-      await atomicWriteFile(result.filePath, bytes)
-      allowDocWrite(event.sender.id, result.filePath)
-      await rememberDiskState(event.sender.id, result.filePath, bytes)
-      pushRecent(result.filePath)
-      notifyFileSaved(event.sender, result.filePath)
-      return { ok: true, path: result.filePath }
-    } catch (err) {
-      return { ok: false, error: String(err) }
-    }
-  })
+  ipcMain.handle(
+    'docs:save-as',
+    async (event, defaultName: string, data: ArrayBuffer, sourcePath?: string | null) => {
+      // an orphaned (closed-tab) renderer must not open dialogs or land new files
+      if (tornDownWcIds.has(event.sender.id)) return { ok: false }
+      const result = await saveDialog(event, {
+        title: tm('dlgSaveAs'),
+        defaultPath: defaultName,
+        filters: [{ name: tm('filterWord'), extensions: ['docx'] }],
+      })
+      if (result.canceled || !result.filePath) return { ok: false }
+      // the tab may have been closed while the dialog was open; checked before the
+      // write because Save As may overwrite an existing file (no safe rollback)
+      if (tornDownWcIds.has(event.sender.id)) return { ok: false }
+      try {
+        const passwordState = snapshotDocPassword(
+          event.sender.id,
+          typeof sourcePath === 'string' && sourcePath ? sourcePath : null,
+        )
+        const bytes = passwordState.password
+          ? encryptDocx(Buffer.from(data), passwordState.password)
+          : Buffer.from(data)
+        await atomicWriteFile(result.filePath, bytes)
+        if (tornDownWcIds.has(event.sender.id)) return { ok: false }
+        allowDocWrite(event.sender.id, result.filePath)
+        await rememberDiskState(event.sender.id, result.filePath, bytes)
+        if (tornDownWcIds.has(event.sender.id)) return { ok: false }
+        const passwordIntentPending = commitDocPasswordSave(
+          event.sender.id,
+          passwordState,
+          result.filePath,
+        )
+        pushRecent(result.filePath)
+        notifyFileSaved(event.sender, result.filePath)
+        return { ok: true, path: result.filePath, passwordIntentPending }
+      } catch (err) {
+        return { ok: false, error: String(err) }
+      }
+    },
+  )
 
   ipcMain.handle('docs:save-new', async (event, defaultName: string, data: ArrayBuffer) => {
     try {
@@ -3313,7 +3486,10 @@ export function registerDocsIpc(): void {
       // itself to the default folder after the user chose Don't Save
       if (tornDownWcIds.has(event.sender.id)) return { ok: false }
       const filePath = uniquePathIn(defaultSaveDir(), defaultName)
-      const bytes = Buffer.from(data)
+      const passwordState = snapshotDocPassword(event.sender.id, null)
+      const bytes = passwordState.password
+        ? encryptDocx(Buffer.from(data), passwordState.password)
+        : Buffer.from(data)
       await atomicWriteFile(filePath, bytes)
       // teardown may have happened while the write was in flight — the path is
       // freshly created, so rolling it back is safe (mirrors docs:write-recovery)
@@ -3323,9 +3499,14 @@ export function registerDocsIpc(): void {
       }
       allowDocWrite(event.sender.id, filePath)
       await rememberDiskState(event.sender.id, filePath, bytes)
+      if (tornDownWcIds.has(event.sender.id)) {
+        await unlink(filePath).catch(() => {})
+        return { ok: false }
+      }
+      const passwordIntentPending = commitDocPasswordSave(event.sender.id, passwordState, filePath)
       pushRecent(filePath)
       notifyFileSaved(event.sender, filePath)
-      return { ok: true, path: filePath }
+      return { ok: true, path: filePath, passwordIntentPending }
     } catch (err) {
       return { ok: false, error: String(err) }
     }
@@ -3427,9 +3608,18 @@ export function registerDocsIpc(): void {
     },
   )
 
-  ipcMain.handle('docs:print', (event) => {
-    // print the calling tab's own content; zero margins — the docx page padding provides them
-    event.sender.print({ margins: { marginType: 'none' } })
+  ipcMain.handle('docs:print', async (event) => {
+    // print the calling tab's own content; zero margins — the docx page padding provides them.
+    // Resolves when the system dialog is dismissed; the print dialog stays open on cancel
+    // (ok=false without error) and surfaces real failures.
+    return new Promise<{ ok: boolean; error?: string }>((resolve) => {
+      event.sender.print({ margins: { marginType: 'none' } }, (success, failureReason) => {
+        resolve({
+          ok: success,
+          ...(failureReason && !/cancel/i.test(failureReason) ? { error: failureReason } : {}),
+        })
+      })
+    })
   })
 
   ipcMain.handle(
@@ -3580,6 +3770,26 @@ function sendCommand(command: MenuCommand, payload?: string): void {
   activeDocsWebContents()?.send('menu:command', command, payload)
 }
 
+/**
+ * Per-tab View-menu toggle state (AI Sidebar / Dark Mode), reported by each
+ * renderer whenever it changes. The template can't hardcode `checked` — the
+ * state lives in the renderer and differs per tab — so builds read the active
+ * tab's last report, and reports from the active tab patch the built menu in
+ * place (buildDocsMenu also re-runs on every tab focus switch).
+ * Defaults mirror the renderer's initial state: sidebar shown, light canvas.
+ */
+const viewMenuStateByWebContents = new Map<number, { aiSidebar: boolean; darkCanvas: boolean }>()
+
+function activeViewMenuState(): { aiSidebar: boolean; darkCanvas: boolean } {
+  const id = activeDocsWebContents()?.id
+  return (
+    (id !== undefined ? viewMenuStateByWebContents.get(id) : undefined) ?? {
+      aiSidebar: true,
+      darkCanvas: false,
+    }
+  )
+}
+
 /** shell-injected items appended to the File menu (e.g. Back to Home); persists
  * across the internal rebuilds pushRecent() triggers */
 let extraFileMenuItems: MenuItemConstructorOptions[] = []
@@ -3671,7 +3881,9 @@ export function buildDocsMenu(): void {
         {
           label: tm('menuPrint'),
           accelerator: 'CmdOrCtrl+P',
-          click: () => activeDocsWebContents()?.print({}),
+          // routed through the renderer: it opens the pagination preview first so each
+          // printed sheet is exactly one editor page (WYSIWYG), then invokes docs:print
+          click: () => sendCommand('print'),
         },
       ],
     },
@@ -3720,11 +3932,23 @@ export function buildDocsMenu(): void {
         { label: tm('menuPageWidth'), click: () => sendCommand('zoom-page-width') },
         { label: tm('menuWholePage'), click: () => sendCommand('zoom-whole-page') },
         { type: 'separator' },
-        { label: tm('menuAiSidebar'), click: () => sendCommand('toggle-ai') },
-        { label: tm('menuDarkMode'), click: () => sendCommand('toggle-dark') },
+        {
+          id: 'docs-menu-ai-sidebar',
+          type: 'checkbox',
+          checked: activeViewMenuState().aiSidebar,
+          label: tm('menuAiSidebar'),
+          click: () => sendCommand('toggle-ai'),
+        },
+        {
+          id: 'docs-menu-dark-mode',
+          type: 'checkbox',
+          checked: activeViewMenuState().darkCanvas,
+          label: tm('menuDarkMode'),
+          click: () => sendCommand('toggle-dark'),
+        },
         { type: 'separator' },
         { role: 'togglefullscreen', label: tm('menuFullscreen') },
-        ...(isDev ? [{ role: 'toggleDevTools' as const }] : []),
+        ...(isDev ? [toggleDevToolsItem(appMenuLabels(getUiLang()))] : []),
       ],
     },
     {
@@ -3782,8 +4006,8 @@ export function buildDocsMenu(): void {
       submenu: [
         { label: tm('menuWordCount'), click: () => sendCommand('word-count') },
         { type: 'separator' },
-        { label: tm('menuSpelling'), enabled: false },
-        { label: tm('menuMacros'), enabled: false },
+        // Runs the same AI proofread as Review > Editor (renderer shows the one-time ack)
+        { label: tm('menuAiProofread'), click: () => sendCommand('ai-proofread') },
       ],
     },
     windowMenuTemplate(process.platform, appMenuLabels(getUiLang())),
@@ -3887,6 +4111,24 @@ interface DocsCloseState {
 const closeCheckWaiters = new Map<number, (state: DocsCloseState) => void>()
 const closeSaveWaiters = new Map<number, (ok: boolean) => void>()
 
+ipcMain.on('docs:view-menu-state', (event, state: unknown) => {
+  const s = state as { aiSidebar?: unknown; darkCanvas?: unknown } | null
+  const next = { aiSidebar: s?.aiSidebar === true, darkCanvas: s?.darkCanvas === true }
+  if (!viewMenuStateByWebContents.has(event.sender.id)) {
+    const id = event.sender.id
+    event.sender.once('destroyed', () => viewMenuStateByWebContents.delete(id))
+  }
+  viewMenuStateByWebContents.set(event.sender.id, next)
+  // patch the live menu only for the active tab; an inactive tab's state gets
+  // picked up by the buildDocsMenu run its next focus triggers
+  if (event.sender.id !== activeDocsWebContents()?.id) return
+  const menu = Menu.getApplicationMenu()
+  const ai = menu?.getMenuItemById('docs-menu-ai-sidebar')
+  if (ai) ai.checked = next.aiSidebar
+  const dark = menu?.getMenuItemById('docs-menu-dark-mode')
+  if (dark) dark.checked = next.darkCanvas
+})
+
 ipcMain.on('docs:close-check-result', (event, state: unknown) => {
   const waiter = closeCheckWaiters.get(event.sender.id)
   if (!waiter) return
@@ -3984,8 +4226,21 @@ async function performDocsClose(
   const state = await queryCloseState(contents)
   if (!state.dirty || contents.isDestroyed()) return true
   if (state.unresponsive) {
-    // Renderer never answered (blank/stuck tab). Native dialogs over KasmVNC freeze the UI.
-    return true
+    // No reply: saving through the renderer won't work either — offer Close Anyway / Cancel
+    const options = {
+      type: 'warning' as const,
+      message: tm('closeNoReplyMsg'),
+      detail: tm('closeNoReplyDetail'),
+      buttons: [tm('btnCloseAnyway'), tm('btnCancel')],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    }
+    const { response } =
+      parent && !parent.isDestroyed()
+        ? await dialog.showMessageBox(parent, options)
+        : await dialog.showMessageBox(options)
+    return response === 0
   }
   // autosave on (and has a path, already checked when the renderer reported): save silently and proceed; only prompt on failure
   if (state.autoSave && (await requestRendererSave(contents))) return true
@@ -4066,7 +4321,10 @@ export function startDocsStandalone(): void {
   // dev runs must not share the packaged app's userData (recent files, AI settings)
   // or its single-instance lock — otherwise `npm run dev` silently quits whenever
   // the installed GenOffice Docs is open and forwards its argv there instead.
-  if (isDev) app.setPath('userData', join(app.getPath('appData'), 'GenOffice Docs Dev'))
+  // AI_OFFICE_USER_DATA: E2E/screenshot runs isolate userData (and the
+  // single-instance lock) so parallel automation sessions don't evict each other
+  if (process.env.AI_OFFICE_USER_DATA) app.setPath('userData', process.env.AI_OFFICE_USER_DATA)
+  else if (isDev) app.setPath('userData', join(app.getPath('appData'), 'GenOffice Docs Dev'))
 
   const hasSingleInstanceLock = app.requestSingleInstanceLock()
   if (!hasSingleInstanceLock) {
