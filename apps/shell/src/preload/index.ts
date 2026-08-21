@@ -3,6 +3,8 @@ import type { IpcRendererEvent } from 'electron'
 import type {
   AccountLoginEvent,
   AccountStatus,
+  AiModelSettings,
+  AiProviderTestResult,
   CloudProjectsSnapshot,
   HomeApi,
   RecentEntry,
@@ -10,10 +12,11 @@ import type {
   RenameResult,
   ProjectHomeApi,
   ProjectSummaryEntry,
+  ReasoningEffort,
   TimelineEntryItem,
   UiLanguage,
 } from '../shared/home-api'
-import { HOME_CHANNELS, PROJECT_CHANNELS } from '../shared/home-api'
+import { AI_CHANNELS, HOME_CHANNELS, PROJECT_CHANNELS } from '../shared/home-api'
 import type { TabsApi, TabSummary } from '../shared/tabs-api'
 import { TABS_CHANNELS } from '../shared/tabs-api'
 
@@ -86,6 +89,9 @@ const homeApi: HomeApi = {
   async newMarkdown(opts) {
     await ipcRenderer.invoke(HOME_CHANNELS.newMarkdown, opts)
   },
+  async newPdf(opts) {
+    await ipcRenderer.invoke(HOME_CHANNELS.newPdf, opts)
+  },
   async removeRecent(paths) {
     await ipcRenderer.invoke(HOME_CHANNELS.removeRecent, paths)
   },
@@ -147,6 +153,30 @@ const homeApi: HomeApi = {
   async accountLogout() {
     await ipcRenderer.invoke(HOME_CHANNELS.accountLogout)
   },
+  async openSettings() {
+    await ipcRenderer.invoke(HOME_CHANNELS.openSettings)
+  },
+  async getAiModelSettings() {
+    const result: unknown = await ipcRenderer.invoke(AI_CHANNELS.getModelSettings)
+    return asAiModelSettings(result)
+  },
+  async setAiModelSettings(settings) {
+    const result: unknown = await ipcRenderer.invoke(
+      AI_CHANNELS.setModelSettings,
+      aiModelSettingsPayload(settings),
+    )
+    return asAiModelSettings(result)
+  },
+  async testAiProvider(settings) {
+    const result: unknown = await ipcRenderer.invoke(
+      AI_CHANNELS.testProvider,
+      aiModelSettingsPayload({ ...settings, mode: 'custom' }),
+    )
+    const value = result as AiProviderTestResult | undefined
+    return value?.ok === true
+      ? { ok: true }
+      : { ok: false, error: value?.error ?? 'Request failed' }
+  },
   async getAppVersion() {
     const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.getAppVersion)
     return typeof result === 'string' ? result : ''
@@ -156,7 +186,8 @@ const homeApi: HomeApi = {
     return result === true
   },
   async setOnboardingSeen() {
-    await ipcRenderer.invoke(HOME_CHANNELS.setOnboardingSeen)
+    const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.setOnboardingSeen)
+    return result === true
   },
   async getTheme() {
     const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.getTheme)
@@ -166,6 +197,15 @@ const homeApi: HomeApi = {
     if (theme !== 'light' && theme !== 'dark' && theme !== 'system')
       throw new Error('Invalid theme.')
     await ipcRenderer.invoke(HOME_CHANNELS.setTheme, theme)
+  },
+  async getAnalyticsEnabled() {
+    const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.getAnalyticsEnabled)
+    return result !== false
+  },
+  async setAnalyticsEnabled(enabled) {
+    if (typeof enabled !== 'boolean') throw new Error('Invalid analytics consent.')
+    const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.setAnalyticsEnabled, enabled)
+    return result === true
   },
   async getDefaultSaveDir() {
     const result: unknown = await ipcRenderer.invoke(HOME_CHANNELS.getDefaultSaveDir)
@@ -225,6 +265,39 @@ const homeApi: HomeApi = {
     if (typeof projectUrl !== 'string' || !projectUrl) throw new Error('Invalid project URL.')
     await ipcRenderer.invoke(HOME_CHANNELS.openCloudProject, projectUrl)
   },
+}
+
+const REASONING_EFFORTS: readonly ReasoningEffort[] = ['minimal', 'low', 'medium', 'high']
+
+/** finite number, else null — null is the wire value for "leave this field out" */
+function asOptionalNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function asAiModelSettings(result: unknown): AiModelSettings {
+  const value = (result ?? {}) as Partial<AiModelSettings>
+  return {
+    mode: value.mode === 'custom' ? 'custom' : 'genspark',
+    baseUrl: typeof value.baseUrl === 'string' ? value.baseUrl : '',
+    model: typeof value.model === 'string' ? value.model : '',
+    apiKey: typeof value.apiKey === 'string' ? value.apiKey : '',
+    temperature: asOptionalNumber(value.temperature),
+    maxTokens: asOptionalNumber(value.maxTokens),
+    reasoningEffort: REASONING_EFFORTS.includes(value.reasoningEffort as ReasoningEffort)
+      ? (value.reasoningEffort as ReasoningEffort)
+      : null,
+  }
+}
+
+/** plain structured-cloneable payload for the main process (which re-validates) */
+function aiModelSettingsPayload(settings: AiModelSettings): AiModelSettings {
+  return {
+    ...asAiModelSettings(settings),
+    mode: settings.mode === 'custom' ? 'custom' : 'genspark',
+    baseUrl: String(settings.baseUrl ?? ''),
+    model: String(settings.model ?? ''),
+    apiKey: String(settings.apiKey ?? ''),
+  }
 }
 
 function asCloudProjectsSnapshot(result: unknown): CloudProjectsSnapshot | null {

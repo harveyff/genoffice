@@ -10,10 +10,22 @@ import {
 } from 'node:fs'
 import { copyFile, mkdir, readFile, readdir, stat, unlink } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import { BrowserWindow, Menu, WebContentsView, app, dialog, ipcMain, net, shell } from 'electron'
 import {
+  BrowserWindow,
+  Menu,
+  WebContentsView,
+  app,
+  dialog,
+  ipcMain,
+  session,
+  shell,
+} from 'electron'
+import { buildInstructionsPrompt, skillBodyForTool } from '@genoffice/agent-core'
+import type { AgentRules, AppSurface, UserSkill } from '@genoffice/agent-core'
+import {
+  AgentInstructionsStore,
   appMenuLabels,
-  configuredDefaultSaveDir,
+  browsePage,
   contextMenuLabels,
   fetchRemoteImage,
   installContextMenu,
@@ -21,10 +33,8 @@ import {
   safeExternalUrl,
   showOpenDialogWithMemory,
   showSaveDialogWithMemory,
-  toggleDevToolsItem,
   windowMenuTemplate,
 } from '@genoffice/electron-utils'
-import { configureMetricsCache, familyVerticalMetrics } from '@genoffice/font-metrics'
 import { createI18n, getUiLang, normalizeLang, setUiLang } from '@genoffice/i18n'
 import { ProjectStore } from '@genoffice/project-store'
 import type {
@@ -38,13 +48,20 @@ import { parseFileToText } from '@genoffice/file-parse'
 import {
   AiCreditsError,
   AiTimeoutError,
-  isAiNetworkError,
+  activeProvider,
+  applyModelSettings,
   chatForProvider,
   defaultAiSettings,
+  isReasoningEffort,
+  normalizeProxyUrl,
   resolveAiSettings,
-  setRescueFetch,
   streamForProvider,
+  toModelSettings,
   type AiChatRequest,
+  type AiChatResponse,
+  type AiModelSettings,
+  type AiProviderConfig,
+  type AiProviderId,
   type AiSettings,
   type AiStreamChunk,
   type AiStreamRequest,
@@ -58,6 +75,9 @@ import {
   hasGskAuth,
   webSearch,
   imageSearch,
+  setGskProxyUrl,
+  setTavilyApiKey,
+  tavilyExtract,
 } from '@genoffice/ai-search'
 import type {
   AttachmentAddResult,
@@ -170,7 +190,8 @@ const tMain = createI18n({
     menuParagraph: '段落…',
     menuTools: '工具',
     menuWordCount: '字数统计…',
-    menuAiProofread: 'AI 校对',
+    menuSpelling: '拼写和语法检查',
+    menuMacros: '宏',
     menuWindow: '窗口',
     menuHelp: '帮助',
     menuDocsHelp: 'GenOffice Docs 帮助',
@@ -263,7 +284,8 @@ const tMain = createI18n({
     menuParagraph: 'Paragraph…',
     menuTools: 'Tools',
     menuWordCount: 'Word Count…',
-    menuAiProofread: 'AI Proofread',
+    menuSpelling: 'Spelling and Grammar',
+    menuMacros: 'Macros',
     menuWindow: 'Window',
     menuHelp: 'Help',
     menuDocsHelp: 'GenOffice Docs Help',
@@ -356,7 +378,8 @@ const tMain = createI18n({
     menuParagraph: '段落…',
     menuTools: 'ツール',
     menuWordCount: '文字カウント…',
-    menuAiProofread: 'AI 校正',
+    menuSpelling: 'スペルチェックと文章校正',
+    menuMacros: 'マクロ',
     menuWindow: 'ウィンドウ',
     menuHelp: 'ヘルプ',
     menuDocsHelp: 'GenOffice Docs ヘルプ',
@@ -450,7 +473,8 @@ const tMain = createI18n({
     menuParagraph: '단락…',
     menuTools: '도구',
     menuWordCount: '단어 개수…',
-    menuAiProofread: 'AI 교정',
+    menuSpelling: '맞춤법 및 문법 검사',
+    menuMacros: '매크로',
     menuWindow: '창',
     menuHelp: '도움말',
     menuDocsHelp: 'GenOffice Docs 도움말',
@@ -545,7 +569,8 @@ const tMain = createI18n({
     menuParagraph: 'Paragraphe…',
     menuTools: 'Outils',
     menuWordCount: 'Statistiques…',
-    menuAiProofread: 'Relecture IA',
+    menuSpelling: 'Grammaire et orthographe',
+    menuMacros: 'Macros',
     menuWindow: 'Fenêtre',
     menuHelp: 'Aide',
     menuDocsHelp: 'Aide GenOffice Docs',
@@ -640,7 +665,8 @@ const tMain = createI18n({
     menuParagraph: 'Absatz…',
     menuTools: 'Extras',
     menuWordCount: 'Wörter zählen…',
-    menuAiProofread: 'KI-Korrektur',
+    menuSpelling: 'Rechtschreibung und Grammatik',
+    menuMacros: 'Makros',
     menuWindow: 'Fenster',
     menuHelp: 'Hilfe',
     menuDocsHelp: 'GenOffice Docs-Hilfe',
@@ -734,7 +760,8 @@ const tMain = createI18n({
     menuParagraph: 'Párrafo…',
     menuTools: 'Herramientas',
     menuWordCount: 'Contar palabras…',
-    menuAiProofread: 'Corrección con IA',
+    menuSpelling: 'Ortografía y gramática',
+    menuMacros: 'Macros',
     menuWindow: 'Ventana',
     menuHelp: 'Ayuda',
     menuDocsHelp: 'Ayuda de GenOffice Docs',
@@ -827,7 +854,8 @@ const tMain = createI18n({
     menuParagraph: 'ย่อหน้า…',
     menuTools: 'เครื่องมือ',
     menuWordCount: 'นับจำนวนคำ…',
-    menuAiProofread: 'พิสูจน์อักษรด้วย AI',
+    menuSpelling: 'การสะกดและไวยากรณ์',
+    menuMacros: 'แมโคร',
     menuWindow: 'หน้าต่าง',
     menuHelp: 'วิธีใช้',
     menuDocsHelp: 'วิธีใช้ GenOffice Docs',
@@ -920,7 +948,8 @@ const tMain = createI18n({
     menuParagraph: 'Paragraf…',
     menuTools: 'Alat',
     menuWordCount: 'Hitungan Kata…',
-    menuAiProofread: 'Koreksi AI',
+    menuSpelling: 'Ejaan dan Tata Bahasa',
+    menuMacros: 'Makro',
     menuWindow: 'Jendela',
     menuHelp: 'Bantuan',
     menuDocsHelp: 'Bantuan GenOffice Docs',
@@ -1014,7 +1043,8 @@ const tMain = createI18n({
     menuParagraph: 'Абзац…',
     menuTools: 'Сервис',
     menuWordCount: 'Статистика…',
-    menuAiProofread: 'ИИ-корректура',
+    menuSpelling: 'Правописание',
+    menuMacros: 'Макросы',
     menuWindow: 'Окно',
     menuHelp: 'Справка',
     menuDocsHelp: 'Справка GenOffice Docs',
@@ -1108,7 +1138,8 @@ const tMain = createI18n({
     menuParagraph: 'فقرة…',
     menuTools: 'أدوات',
     menuWordCount: 'عدد الكلمات…',
-    menuAiProofread: 'تدقيق بالذكاء الاصطناعي',
+    menuSpelling: 'تدقيق إملائي ونحوي',
+    menuMacros: 'وحدات الماكرو',
     menuWindow: 'نافذة',
     menuHelp: 'تعليمات',
     menuDocsHelp: 'تعليمات GenOffice Docs',
@@ -1202,7 +1233,8 @@ const tMain = createI18n({
     menuParagraph: 'Parágrafo…',
     menuTools: 'Ferramentas',
     menuWordCount: 'Contagem de Palavras…',
-    menuAiProofread: 'Revisão com IA',
+    menuSpelling: 'Ortografia e Gramática',
+    menuMacros: 'Macros',
     menuWindow: 'Janela',
     menuHelp: 'Ajuda',
     menuDocsHelp: 'Ajuda do GenOffice Docs',
@@ -1296,7 +1328,8 @@ const tMain = createI18n({
     menuParagraph: 'Paragrafo…',
     menuTools: 'Strumenti',
     menuWordCount: 'Conteggio parole…',
-    menuAiProofread: 'Correzione IA',
+    menuSpelling: 'Ortografia e grammatica',
+    menuMacros: 'Macro',
     menuWindow: 'Finestra',
     menuHelp: 'Aiuto',
     menuDocsHelp: 'Guida di GenOffice Docs',
@@ -1390,7 +1423,8 @@ const tMain = createI18n({
     menuParagraph: 'Akapit…',
     menuTools: 'Narzędzia',
     menuWordCount: 'Statystyka wyrazów…',
-    menuAiProofread: 'Korekta AI',
+    menuSpelling: 'Pisownia i gramatyka',
+    menuMacros: 'Makra',
     menuWindow: 'Okno',
     menuHelp: 'Pomoc',
     menuDocsHelp: 'Pomoc GenOffice Docs',
@@ -1484,7 +1518,8 @@ const tMain = createI18n({
     menuParagraph: 'Alinea…',
     menuTools: 'Extra',
     menuWordCount: 'Woorden tellen…',
-    menuAiProofread: 'AI-proeflezen',
+    menuSpelling: 'Spelling en grammatica',
+    menuMacros: "Macro's",
     menuWindow: 'Venster',
     menuHelp: 'Help',
     menuDocsHelp: 'GenOffice Docs Help',
@@ -1578,7 +1613,8 @@ const tMain = createI18n({
     menuParagraph: 'Perenggan…',
     menuTools: 'Alat',
     menuWordCount: 'Kiraan Perkataan…',
-    menuAiProofread: 'Pembacaan Pruf AI',
+    menuSpelling: 'Ejaan dan Tatabahasa',
+    menuMacros: 'Makro',
     menuWindow: 'Tetingkap',
     menuHelp: 'Bantuan',
     menuDocsHelp: 'Bantuan GenOffice Docs',
@@ -1670,7 +1706,8 @@ const tMain = createI18n({
     menuParagraph: 'פסקה…',
     menuTools: 'כלים',
     menuWordCount: 'ספירת מילים…',
-    menuAiProofread: 'הגהת AI',
+    menuSpelling: 'איות ודקדוק',
+    menuMacros: 'פקודות מאקרו',
     menuWindow: 'חלון',
     menuHelp: 'עזרה',
     menuDocsHelp: 'עזרה של GenOffice Docs',
@@ -1764,7 +1801,8 @@ const tMain = createI18n({
     menuParagraph: 'अनुच्छेद…',
     menuTools: 'उपकरण',
     menuWordCount: 'शब्द गणना…',
-    menuAiProofread: 'AI प्रूफ़रीडिंग',
+    menuSpelling: 'वर्तनी और व्याकरण',
+    menuMacros: 'मैक्रो',
     menuWindow: 'विंडो',
     menuHelp: 'सहायता',
     menuDocsHelp: 'GenOffice Docs सहायता',
@@ -1855,7 +1893,8 @@ const tMain = createI18n({
     menuParagraph: '段落…',
     menuTools: '工具',
     menuWordCount: '字數統計…',
-    menuAiProofread: 'AI 校對',
+    menuSpelling: '拼字及文法檢查',
+    menuMacros: '巨集',
     menuWindow: '視窗',
     menuHelp: '說明',
     menuDocsHelp: 'GenOffice Docs 說明',
@@ -1930,14 +1969,14 @@ async function openDialog(event: IpcMainInvokeEvent, options: OpenDialogOptions)
 }
 
 async function saveDialog(event: IpcMainInvokeEvent, options: SaveDialogOptions) {
-  // before any pick is remembered, bare-name suggestions anchor in the
-  // configurable default save folder instead of Electron's Downloads pin
-  return showSaveDialogWithMemory(dialog, dialogParent(event), options, defaultSaveDir())
+  return showSaveDialogWithMemory(dialog, dialogParent(event), options)
 }
 
-/** default folder where new files land on their first (silent) save; shared with the other editors via shell. User-configurable (app-settings.json), falls back to <Documents>/GenOffice. */
+/** default folder where new files land on their first (silent) save; shared with the other editors via shell */
 export function defaultSaveDir(): string {
-  return configuredDefaultSaveDir(app)
+  const dir = join(app.getPath('documents'), 'GenOffice')
+  mkdirSync(dir, { recursive: true })
+  return dir
 }
 
 /** first free path for fileName inside dir: name.ext, name-2.ext, name-3.ext… */
@@ -2140,13 +2179,7 @@ function allowPdfWrite(wcId: number, filePath: string): void {
   pdfWritablePaths.set(wcId, set)
 }
 
-// Fidelity-harness escape hatch: headless runs have no save dialog to authorize
-// paths, so an explicitly configured directory (set only by our test scripts)
-// is treated as pre-authorized for PDF export.
-const testExportDir = process.env.GENOFFICE_TEST_EXPORT_DIR || null
-
 function canPdfWrite(wcId: number, filePath: string): boolean {
-  if (testExportDir && filePath.startsWith(testExportDir + '/')) return true
   return pdfWritablePaths.get(wcId)?.has(filePath) === true
 }
 
@@ -2461,18 +2494,212 @@ const SETTINGS_PATH = () => userDataPath('ai-settings.json')
 const activeAiStreams = new Map<string, AbortController>()
 
 /**
+ * Read the settings file and normalize the provider selection: a complete
+ * custom endpoint is honoured, anything else falls back to Genspark.
+ */
+function readAiSettings(): AiSettings {
+  const stored = readJson<Partial<AiSettings> & LegacyAiSettings>(SETTINGS_PATH(), {})
+  const settings = resolveAiSettings(stored, defaultAiSettings())
+  settings.provider = activeProvider(settings)
+  return settings
+}
+
+/**
+ * Push the network-facing settings into the modules that hold them as process
+ * state. Called on load and after every save so a settings change takes effect
+ * without a restart, the same way the provider switch does.
+ */
+export function applyNetworkSettings(settings: AiSettings): void {
+  setTavilyApiKey(settings.tavilyApiKey ?? '')
+  void applyProxy(settings.proxyUrl ?? '')
+}
+
+/**
+ * Load the persisted network settings at startup. Returns true when the user
+ * configured an explicit proxy, which tells the app bootstraps to skip their
+ * env-var / system-proxy detection: an explicit choice must win over both, and
+ * must also be honoured when it says "no proxy" on a machine whose system
+ * proxy would otherwise be picked up.
+ */
+export function bootstrapNetworkSettings(): boolean {
+  const settings = readAiSettings()
+  applyNetworkSettings(settings)
+  return !!normalizeProxyUrl(settings.proxyUrl)
+}
+
+/** file-backed rules + skills, shared by every editor module through this IPC */
+let instructionsStore: AgentInstructionsStore | null = null
+function instructions(): AgentInstructionsStore {
+  if (!instructionsStore) instructionsStore = new AgentInstructionsStore(app.getPath('userData'))
+  return instructionsStore
+}
+
+// ── settings accessors for the shell's settings window ──────────────
+// The window talks to the shell, but the storage lives here alongside the
+// handlers the editors use, so both read and write the same files.
+
+export function readModelSettings(): AiModelSettings {
+  return toModelSettings(readAiSettings())
+}
+
+export function writeModelSettings(input: AiModelSettings): AiModelSettings {
+  const next = applyModelSettings(readAiSettings(), sanitizeModelSettings(input))
+  writeJson(SETTINGS_PATH(), next)
+  applyNetworkSettings(next)
+  return toModelSettings(next)
+}
+
+export function readAgentRules(): AgentRules {
+  return instructions().readRules()
+}
+
+export function writeAgentRules(rules: AgentRules): AgentRules {
+  return instructions().writeRules(rules ?? {})
+}
+
+export function listAgentSkills(): UserSkill[] {
+  return instructions().listSkills()
+}
+
+export function saveAgentSkill(
+  input: Partial<UserSkill> & { name: string; body: string },
+): UserSkill {
+  return instructions().saveSkill({
+    ...(input.id ? { id: input.id } : {}),
+    name: String(input.name ?? ''),
+    description: input.description ?? '',
+    scopes: input.scopes ?? ['global'],
+    body: String(input.body ?? ''),
+    enabled: input.enabled !== false,
+  })
+}
+
+export function deleteAgentSkill(id: string): void {
+  instructions().deleteSkill(String(id ?? ''))
+}
+
+export function importAgentSkills(
+  files: Array<{ filename: string; content: string }>,
+): UserSkill[] {
+  const saved: UserSkill[] = []
+  for (const file of (Array.isArray(files) ? files : []).slice(0, 50)) {
+    try {
+      saved.push(
+        instructions().importSkillMarkdown(
+          String(file?.content ?? ''),
+          String(file?.filename ?? 'skill.md'),
+        ),
+      )
+    } catch (err) {
+      console.warn('[skills] import failed:', err)
+    }
+  }
+  return saved
+}
+
+/**
+ * Backend for one request. The settings file — not the renderer's snapshot —
+ * is the source of truth, so changing the model in the home window takes
+ * effect in every already-open docs/sheets/slides/pdf tab without a reload.
+ * The genspark key never lands in the file; it comes from the gsk login state
+ * per request.
+ */
+function activeAiConfig(): { provider: AiProviderId; config: AiProviderConfig | undefined } {
+  const settings = readAiSettings()
+  const provider = settings.provider
+  const config = settings.providers?.[provider]
+  if (provider === 'genspark' && config && !config.apiKey) {
+    return { provider, config: { ...config, apiKey: gskApiKey() } }
+  }
+  return { provider, config }
+}
+
+/** custom endpoints may be anonymous (Ollama, LM Studio, vLLM); every other provider needs a key */
+function needsApiKey(provider: AiProviderId): boolean {
+  return provider !== 'custom'
+}
+
+/** last proxy handed to undici/Chromium, so a no-op save does not churn them */
+let appliedProxyUrl: string | null = null
+
+/**
+ * Route outbound traffic through the user's proxy.
+ *
+ * Three consumers need telling separately, which is why this is not one call:
+ * main-process `fetch` runs on undici and ignores the system proxy entirely;
+ * Chromium sessions carry the renderer, sign-in window and the agent browser;
+ * and the gsk CLI is a child process that only sees environment variables.
+ *
+ * An empty url restores direct connections, so clearing the field in the
+ * dialog actually turns the proxy off rather than leaving the old one wired.
+ */
+export async function applyProxy(rawUrl: string): Promise<void> {
+  const proxyUrl = normalizeProxyUrl(rawUrl)
+  if (proxyUrl === appliedProxyUrl) return
+  appliedProxyUrl = proxyUrl
+  setGskProxyUrl(proxyUrl)
+  try {
+    const { ProxyAgent, getGlobalDispatcher, setGlobalDispatcher, Agent } = await import('undici')
+    if (proxyUrl) {
+      setGlobalDispatcher(new ProxyAgent(proxyUrl))
+    } else if (getGlobalDispatcher() instanceof ProxyAgent) {
+      setGlobalDispatcher(new Agent())
+    }
+  } catch (err) {
+    console.warn('[proxy] failed to set undici dispatcher:', err)
+  }
+  try {
+    // proxyRules '' clears it; Chromium understands socks5:// here too
+    await session.defaultSession.setProxy(proxyUrl ? { proxyRules: proxyUrl } : { mode: 'system' })
+  } catch (err) {
+    console.warn('[proxy] failed to set session proxy:', err)
+  }
+  console.log(
+    proxyUrl
+      ? // strip user:pass before logging
+        `[proxy] outbound via ${proxyUrl.replace(/\/\/[^@/]*@/, '//***@')}`
+      : '[proxy] direct (system default)',
+  )
+}
+
+/** current proxy, for callers that need to pass it on (e.g. the agent browser) */
+export function currentProxyUrl(): string {
+  return appliedProxyUrl ?? ''
+}
+
+/** a finite number inside [min, max], else null ("not set") */
+function boundedNumber(value: unknown, min: number, max: number): number | null {
+  const n = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(n)) return null
+  return n >= min && n <= max ? n : null
+}
+
+/** normalize an untrusted renderer payload into the settings the dialog can express */
+function sanitizeModelSettings(input: Partial<AiModelSettings> | undefined): AiModelSettings {
+  return {
+    mode: input?.mode === 'custom' ? 'custom' : 'genspark',
+    baseUrl: String(input?.baseUrl ?? ''),
+    model: String(input?.model ?? ''),
+    apiKey: String(input?.apiKey ?? ''),
+    temperature: input?.temperature === null ? null : boundedNumber(input?.temperature, 0, 2),
+    maxTokens:
+      input?.maxTokens === null
+        ? null
+        : boundedNumber(Math.trunc(Number(input?.maxTokens)), 1, 1_000_000),
+    reasoningEffort: isReasoningEffort(input?.reasoningEffort) ? input.reasoningEffort : null,
+    tavilyApiKey: String(input?.tavilyApiKey ?? '').trim(),
+    // normalized here too: an unusable proxy string must never reach undici
+    proxyUrl: normalizeProxyUrl(String(input?.proxyUrl ?? '')),
+  }
+}
+
+/**
  * AI settings + chat/stream proxy handlers. Split out so the shell can
  * register them exactly once for all window types (docs, sheets, home) —
  * sheets' standalone AI handlers use the same channel names.
  */
 export function registerAiIpc(): void {
-  ipcMain.handle('ai:get-settings', (): AiSettings => {
-    const stored = readJson<Partial<AiSettings> & LegacyAiSettings>(SETTINGS_PATH(), {})
-    const settings = resolveAiSettings(stored, defaultAiSettings())
-    // AI features all go through Genspark (gsk login); legacy settings with another provider are reset
-    settings.provider = 'genspark'
-    return settings
-  })
+  ipcMain.handle('ai:get-settings', (): AiSettings => readAiSettings())
 
   // Genspark account (gsk login state): auth source for AI features; the frontend uses it to prompt login when logged out
   ipcMain.handle(
@@ -2493,20 +2720,122 @@ export function registerAiIpc(): void {
     writeJson(SETTINGS_PATH(), settings)
   })
 
+  // Flat read/write pair for the settings dialog. One file, one selection —
+  // whatever is set here is what docs, sheets, slides and pdf all call.
+  ipcMain.handle('ai:get-model-settings', (): AiModelSettings => toModelSettings(readAiSettings()))
+
+  ipcMain.handle('ai:set-model-settings', (_event, input: AiModelSettings): AiModelSettings => {
+    const next = applyModelSettings(readAiSettings(), sanitizeModelSettings(input))
+    writeJson(SETTINGS_PATH(), next)
+    // Tavily key and proxy are live process state, not just file contents
+    applyNetworkSettings(next)
+    return toModelSettings(next)
+  })
+
+  // ── user instructions: rules + skills ────────────────────────────
+  // Read by every editor module when it builds its system prompt, and by the
+  // shell's manager UI. One store, so a skill written once applies everywhere
+  // its scope allows.
+
+  ipcMain.handle('ai:get-instructions', (): { rules: AgentRules; skills: UserSkill[] } => ({
+    rules: instructions().readRules(),
+    skills: instructions().listSkills(),
+  }))
+
+  ipcMain.handle('ai:set-rules', (_event, rules: AgentRules): AgentRules =>
+    instructions().writeRules(rules ?? {}),
+  )
+
+  ipcMain.handle(
+    'ai:save-skill',
+    (_event, input: Parameters<AgentInstructionsStore['saveSkill']>[0]) =>
+      instructions().saveSkill({
+        ...input,
+        name: String(input?.name ?? ''),
+        body: String(input?.body ?? ''),
+      }),
+  )
+
+  /** bulk upload: each entry is one skill.md the user picked */
+  ipcMain.handle(
+    'ai:import-skills',
+    (_event, files: Array<{ filename: string; content: string }>): UserSkill[] => {
+      const list = Array.isArray(files) ? files : []
+      const saved: UserSkill[] = []
+      for (const file of list.slice(0, 50)) {
+        try {
+          saved.push(
+            instructions().importSkillMarkdown(
+              String(file?.content ?? ''),
+              String(file?.filename ?? 'skill.md'),
+            ),
+          )
+        } catch (err) {
+          console.warn('[skills] import failed:', err)
+        }
+      }
+      return saved
+    },
+  )
+
+  ipcMain.handle('ai:delete-skill', (_event, id: string) => {
+    instructions().deleteSkill(String(id ?? ''))
+  })
+
+  /**
+   * Prompt section for one surface, assembled in main so every editor gets the
+   * same scope filtering rather than each renderer reimplementing it. Read at
+   * the start of a turn, so an edit in the settings window applies to the next
+   * message without reopening the document.
+   */
+  ipcMain.handle('ai:instructions-prompt', (_event, surface: AppSurface): string =>
+    buildInstructionsPrompt(instructions().readRules(), instructions().listSkills(), surface),
+  )
+
+  /** backs the load_skill tool: the body, only if that skill is in scope here */
+  ipcMain.handle('ai:skill-body', (_event, surface: AppSurface, id: string): string =>
+    skillBodyForTool(instructions().listSkills(), surface, String(id ?? '')),
+  )
+
+  // ── agent browsing + page extraction ─────────────────────────────
+
+  ipcMain.handle(
+    'ai:browse-page',
+    async (_event, url: string, opts?: { maxChars?: number; includeLinks?: boolean }) => {
+      try {
+        const page = await browsePage(url, {
+          ...(opts?.maxChars ? { maxChars: opts.maxChars } : {}),
+          includeLinks: opts?.includeLinks === true,
+          proxyUrl: currentProxyUrl(),
+        })
+        return { ok: true as const, page }
+      } catch (err) {
+        return { ok: false as const, error: err instanceof Error ? err.message : String(err) }
+      }
+    },
+  )
+
+  /** Tavily's server-side extraction: cheaper than browsing and beats bot walls */
+  ipcMain.handle('ai:extract-pages', async (_event, urls: string[], advanced?: boolean) => {
+    try {
+      const result = await tavilyExtract(Array.isArray(urls) ? urls.map(String) : [], {
+        advanced: advanced === true,
+      })
+      return { ok: true as const, ...result }
+    } catch (err) {
+      return { ok: false as const, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
   ipcMain.handle('ai:stream', async (event, request: AiStreamRequest) => {
-    const { requestId, settings, system, messages } = request
+    const { requestId, system, messages } = request
     const tools = request.tools ?? []
     const maxTokens = request.maxTokens ?? 8192
-    const provider = settings.provider
-    let config = settings.providers?.[provider]
-    // the genspark key never enters the settings file; requests take it from the gsk login state
-    if (provider === 'genspark' && config && !config.apiKey) {
-      config = { ...config, apiKey: gskApiKey() }
-    }
+    const { provider, config } = activeAiConfig()
     const send = (chunk: AiStreamChunk) => {
       if (!event.sender.isDestroyed()) event.sender.send('ai:stream-chunk', chunk)
     }
-    if (!config?.apiKey) {
+    if (!config || (needsApiKey(provider) && !config.apiKey)) {
       send({
         requestId,
         type: 'error',
@@ -2552,9 +2881,7 @@ export function registerAiIpc(): void {
             ? { errorCode: 'timeout' as const }
             : err instanceof AiCreditsError
               ? { errorCode: 'credits' as const }
-              : isAiNetworkError(err)
-                ? { errorCode: 'network' as const }
-                : {}),
+              : {}),
         })
       }
     } finally {
@@ -2608,13 +2935,9 @@ export function registerAiIpc(): void {
   )
 
   ipcMain.handle('ai:chat', async (_event, request: AiChatRequest) => {
-    const { settings, system, user } = request
-    const provider = settings.provider
-    let config = settings.providers?.[provider]
-    if (provider === 'genspark' && config && !config.apiKey) {
-      config = { ...config, apiKey: gskApiKey() }
-    }
-    if (!config?.apiKey) {
+    const { system, user } = request
+    const { provider, config } = activeAiConfig()
+    if (!config || (needsApiKey(provider) && !config.apiKey)) {
       return {
         ok: false,
         error: provider === 'genspark' ? tm('errGskNotLoggedIn') : tm('errNoApiKey', { provider }),
@@ -2627,6 +2950,31 @@ export function registerAiIpc(): void {
       return { ok: false, error: String(err) }
     }
   })
+
+  // Dry-run a candidate custom endpoint from the settings dialog: a one-token
+  // round trip that surfaces a wrong URL / model / key before it is saved.
+  ipcMain.handle(
+    'ai:test-provider',
+    async (_event, input: Partial<AiModelSettings>): Promise<AiChatResponse> => {
+      // tested with the same knobs it will run with, so a rejected temperature
+      // or reasoning_effort surfaces here rather than on the user's first turn
+      const draft = sanitizeModelSettings({ ...input, mode: 'custom' })
+      const config: AiProviderConfig = {
+        baseUrl: draft.baseUrl.trim(),
+        model: draft.model.trim(),
+        apiKey: draft.apiKey.trim(),
+        temperature: draft.temperature,
+        ...(draft.maxTokens === null ? {} : { maxTokens: draft.maxTokens }),
+        ...(draft.reasoningEffort === null ? {} : { reasoningEffort: draft.reasoningEffort }),
+      }
+      if (!config.baseUrl || !config.model) return { ok: false, error: tm('errNoModel') }
+      try {
+        return await chatForProvider('custom', config, 'You are a connection test.', 'Reply OK.')
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    },
+  )
 }
 
 // ── project-store IPC (shared across docs / slides / sheets) ──────────────
@@ -2649,6 +2997,9 @@ let fileSavedHook: ((wc: WebContents, filePath: string) => void) | null = null
 export function setDocsFileSavedHook(hook: (wc: WebContents, filePath: string) => void): void {
   fileSavedHook = hook
 }
+
+/** Shell tab title sync on open; optional — stubbed when not wired in docs-main yet. */
+export function setDocsFileOpenedHook(_hook: (wcId: number, filePath: string) => void): void {}
 
 function notifyFileSaved(wc: WebContents, filePath: string): void {
   if (fileSavedHook) fileSavedHook(wc, filePath)
@@ -2820,17 +3171,9 @@ export function registerProjectIpc(): void {
 
 /** document/attachment/window IPC (everything except the AI proxy above) */
 export function registerDocsIpc(): void {
-  // Node fetch (undici) direct connections get reset under VPN/tun setups; retry over Chromium's stack
-  setRescueFetch((url, init) => net.fetch(url, init))
-
   // shared with the other editor modules — last (identical) registration wins
   ipcMain.removeHandler('app:get-language')
   ipcMain.handle('app:get-language', () => getUiLang())
-
-  configureMetricsCache(userDataPath('font-metrics'))
-  ipcMain.handle('docs:font-metrics', (_event, family: string) =>
-    typeof family === 'string' ? familyVerticalMetrics(family) : null,
-  )
 
   ipcMain.handle('docs:open', async (event) => {
     const result = await openDialog(event, {
@@ -3087,18 +3430,9 @@ export function registerDocsIpc(): void {
     },
   )
 
-  ipcMain.handle('docs:print', async (event) => {
-    // print the calling tab's own content; zero margins — the docx page padding provides them.
-    // Resolves when the system dialog is dismissed; the print dialog stays open on cancel
-    // (ok=false without error) and surfaces real failures.
-    return new Promise<{ ok: boolean; error?: string }>((resolve) => {
-      event.sender.print({ margins: { marginType: 'none' } }, (success, failureReason) => {
-        resolve({
-          ok: success,
-          ...(failureReason && !/cancel/i.test(failureReason) ? { error: failureReason } : {}),
-        })
-      })
-    })
+  ipcMain.handle('docs:print', (event) => {
+    // print the calling tab's own content; zero margins — the docx page padding provides them
+    event.sender.print({ margins: { marginType: 'none' } })
   })
 
   ipcMain.handle(
@@ -3249,26 +3583,6 @@ function sendCommand(command: MenuCommand, payload?: string): void {
   activeDocsWebContents()?.send('menu:command', command, payload)
 }
 
-/**
- * Per-tab View-menu toggle state (AI Sidebar / Dark Mode), reported by each
- * renderer whenever it changes. The template can't hardcode `checked` — the
- * state lives in the renderer and differs per tab — so builds read the active
- * tab's last report, and reports from the active tab patch the built menu in
- * place (buildDocsMenu also re-runs on every tab focus switch).
- * Defaults mirror the renderer's initial state: sidebar shown, light canvas.
- */
-const viewMenuStateByWebContents = new Map<number, { aiSidebar: boolean; darkCanvas: boolean }>()
-
-function activeViewMenuState(): { aiSidebar: boolean; darkCanvas: boolean } {
-  const id = activeDocsWebContents()?.id
-  return (
-    (id !== undefined ? viewMenuStateByWebContents.get(id) : undefined) ?? {
-      aiSidebar: true,
-      darkCanvas: false,
-    }
-  )
-}
-
 /** shell-injected items appended to the File menu (e.g. Back to Home); persists
  * across the internal rebuilds pushRecent() triggers */
 let extraFileMenuItems: MenuItemConstructorOptions[] = []
@@ -3360,9 +3674,7 @@ export function buildDocsMenu(): void {
         {
           label: tm('menuPrint'),
           accelerator: 'CmdOrCtrl+P',
-          // routed through the renderer: it opens the pagination preview first so each
-          // printed sheet is exactly one editor page (WYSIWYG), then invokes docs:print
-          click: () => sendCommand('print'),
+          click: () => activeDocsWebContents()?.print({}),
         },
       ],
     },
@@ -3411,23 +3723,11 @@ export function buildDocsMenu(): void {
         { label: tm('menuPageWidth'), click: () => sendCommand('zoom-page-width') },
         { label: tm('menuWholePage'), click: () => sendCommand('zoom-whole-page') },
         { type: 'separator' },
-        {
-          id: 'docs-menu-ai-sidebar',
-          type: 'checkbox',
-          checked: activeViewMenuState().aiSidebar,
-          label: tm('menuAiSidebar'),
-          click: () => sendCommand('toggle-ai'),
-        },
-        {
-          id: 'docs-menu-dark-mode',
-          type: 'checkbox',
-          checked: activeViewMenuState().darkCanvas,
-          label: tm('menuDarkMode'),
-          click: () => sendCommand('toggle-dark'),
-        },
+        { label: tm('menuAiSidebar'), click: () => sendCommand('toggle-ai') },
+        { label: tm('menuDarkMode'), click: () => sendCommand('toggle-dark') },
         { type: 'separator' },
         { role: 'togglefullscreen', label: tm('menuFullscreen') },
-        ...(isDev ? [toggleDevToolsItem(appMenuLabels(getUiLang()))] : []),
+        ...(isDev ? [{ role: 'toggleDevTools' as const }] : []),
       ],
     },
     {
@@ -3485,8 +3785,8 @@ export function buildDocsMenu(): void {
       submenu: [
         { label: tm('menuWordCount'), click: () => sendCommand('word-count') },
         { type: 'separator' },
-        // Runs the same AI proofread as Review > Editor (renderer shows the one-time ack)
-        { label: tm('menuAiProofread'), click: () => sendCommand('ai-proofread') },
+        { label: tm('menuSpelling'), enabled: false },
+        { label: tm('menuMacros'), enabled: false },
       ],
     },
     windowMenuTemplate(process.platform, appMenuLabels(getUiLang())),
@@ -3590,24 +3890,6 @@ interface DocsCloseState {
 const closeCheckWaiters = new Map<number, (state: DocsCloseState) => void>()
 const closeSaveWaiters = new Map<number, (ok: boolean) => void>()
 
-ipcMain.on('docs:view-menu-state', (event, state: unknown) => {
-  const s = state as { aiSidebar?: unknown; darkCanvas?: unknown } | null
-  const next = { aiSidebar: s?.aiSidebar === true, darkCanvas: s?.darkCanvas === true }
-  if (!viewMenuStateByWebContents.has(event.sender.id)) {
-    const id = event.sender.id
-    event.sender.once('destroyed', () => viewMenuStateByWebContents.delete(id))
-  }
-  viewMenuStateByWebContents.set(event.sender.id, next)
-  // patch the live menu only for the active tab; an inactive tab's state gets
-  // picked up by the buildDocsMenu run its next focus triggers
-  if (event.sender.id !== activeDocsWebContents()?.id) return
-  const menu = Menu.getApplicationMenu()
-  const ai = menu?.getMenuItemById('docs-menu-ai-sidebar')
-  if (ai) ai.checked = next.aiSidebar
-  const dark = menu?.getMenuItemById('docs-menu-dark-mode')
-  if (dark) dark.checked = next.darkCanvas
-})
-
 ipcMain.on('docs:close-check-result', (event, state: unknown) => {
   const waiter = closeCheckWaiters.get(event.sender.id)
   if (!waiter) return
@@ -3705,21 +3987,9 @@ async function performDocsClose(
   const state = await queryCloseState(contents)
   if (!state.dirty || contents.isDestroyed()) return true
   if (state.unresponsive) {
-    // No reply: saving through the renderer won't work either — offer Close Anyway / Cancel
-    const options = {
-      type: 'warning' as const,
-      message: tm('closeNoReplyMsg'),
-      detail: tm('closeNoReplyDetail'),
-      buttons: [tm('btnCloseAnyway'), tm('btnCancel')],
-      defaultId: 1,
-      cancelId: 1,
-      noLink: true,
-    }
-    const { response } =
-      parent && !parent.isDestroyed()
-        ? await dialog.showMessageBox(parent, options)
-        : await dialog.showMessageBox(options)
-    return response === 0
+    // Renderer never answered (blank/stuck tab). Native message boxes over KasmVNC
+    // wedge the UI for tens of seconds — close without prompting.
+    return true
   }
   // autosave on (and has a path, already checked when the renderer reported): save silently and proceed; only prompt on failure
   if (state.autoSave && (await requestRendererSave(contents))) return true
@@ -3800,10 +4070,7 @@ export function startDocsStandalone(): void {
   // dev runs must not share the packaged app's userData (recent files, AI settings)
   // or its single-instance lock — otherwise `npm run dev` silently quits whenever
   // the installed GenOffice Docs is open and forwards its argv there instead.
-  // AI_OFFICE_USER_DATA: E2E/screenshot runs isolate userData (and the
-  // single-instance lock) so parallel automation sessions don't evict each other
-  if (process.env.AI_OFFICE_USER_DATA) app.setPath('userData', process.env.AI_OFFICE_USER_DATA)
-  else if (isDev) app.setPath('userData', join(app.getPath('appData'), 'GenOffice Docs Dev'))
+  if (isDev) app.setPath('userData', join(app.getPath('appData'), 'GenOffice Docs Dev'))
 
   const hasSingleInstanceLock = app.requestSingleInstanceLock()
   if (!hasSingleInstanceLock) {

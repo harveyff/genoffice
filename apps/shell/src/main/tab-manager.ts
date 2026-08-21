@@ -151,6 +151,15 @@ export class TabManager {
     this.shellWindow.contentView.addChildView(view)
     view.setVisible(false)
     this.trackHtmlFullScreen(id, view)
+    // Linux/Kasm: bounds stay 0×0 until after the first paint (issue #15). Re-layout
+    // when the docs renderer finishes loading, not only on activateTab.
+    const relayout = () => {
+      if (this.shellWindow.isDestroyed()) return
+      this.layout()
+      setImmediate(() => this.layout())
+    }
+    view.webContents.on('did-finish-load', relayout)
+    view.webContents.on('dom-ready', relayout)
     this.tabs.push({
       id,
       kind: 'docs',
@@ -159,6 +168,8 @@ export class TabManager {
       filePath: openPath,
     })
     this.activateTab(id)
+    setTimeout(relayout, 100)
+    setTimeout(relayout, 500)
     return id
   }
 
@@ -229,7 +240,16 @@ export class TabManager {
     const target = this.tabs.find((t) => t.id === id)
     if (!target) return
     for (const t of this.tabs) t.view?.setVisible(t.id === id)
-    if (target.view) target.view.setBounds(this.contentBounds())
+    if (target.view) {
+      target.view.setBounds(this.contentBounds())
+      // On Linux/X11 a freshly added WebContentsView can still read stale bounds
+      // until the window manager settles (same race as resize — issue #15).
+      const view = target.view
+      setImmediate(() => {
+        if (this.shellWindow.isDestroyed() || this.activeId !== id) return
+        view.setBounds(this.contentBounds())
+      })
+    }
     this.activeId = id
     setActiveDocsResolver(target.kind === 'docs' ? () => target.view!.webContents : () => null)
     if (target.kind === 'sheets' && target.view) setActiveSheetsWebContents(target.view.webContents)

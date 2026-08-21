@@ -155,6 +155,8 @@ export function SettingsModal({
   const [section, setSection] = useState<SectionId>('account')
   const [theme, setTheme] = useState<UiTheme>('system')
   const [saveDir, setSaveDir] = useState('')
+  const [analyticsOn, setAnalyticsOn] = useState(true)
+  const [analyticsSaving, setAnalyticsSaving] = useState(false)
   const [channel, setChannel] = useState<'stable' | 'beta'>('stable')
   const [appVersion, setAppVersion] = useState('')
   const [githubStars, setGithubStars] = useState<number | null>(null)
@@ -166,6 +168,9 @@ export function SettingsModal({
     })
     void window.aiOffice.getDefaultSaveDir?.().then((dir) => {
       if (alive && dir) setSaveDir(dir)
+    })
+    void window.aiOffice.getAnalyticsEnabled?.().then((on) => {
+      if (alive) setAnalyticsOn(on !== false)
     })
     void window.aiOffice.getUpdateChannel?.().then((ch) => {
       if (alive) setChannel(ch)
@@ -245,6 +250,18 @@ export function SettingsModal({
               <>
                 <h3 className="set-pane-title">{t('setSecAccount')}</h3>
                 <Field label={t('setEmail')} value={loggedIn ? email : t('setNotLoggedIn')} />
+                <Field
+                  label={t('setSecModel')}
+                  value="Genspark / OpenAI-compatible"
+                  action={
+                    <button
+                      className="set-btn primary"
+                      onClick={() => void window.aiOffice.openSettings()}
+                    >
+                      {t('setTitle')}
+                    </button>
+                  }
+                />
                 {loggedIn && (
                   <Field
                     label={t('credits')}
@@ -350,6 +367,32 @@ export function SettingsModal({
                     </button>
                   }
                 />
+                <div className="set-field">
+                  <div className="set-field-text">
+                    <div className="set-field-stack">
+                      <div className="set-field-label">{t('setAnalytics')}</div>
+                      <div className="set-field-desc">{t('setAnalyticsDesc')}</div>
+                    </div>
+                  </div>
+                  <button
+                    className="set-switch"
+                    role="switch"
+                    aria-checked={analyticsOn}
+                    aria-label={t('setAnalytics')}
+                    disabled={analyticsSaving}
+                    onClick={() => {
+                      const next = !analyticsOn
+                      setAnalyticsSaving(true)
+                      void window.aiOffice
+                        .setAnalyticsEnabled(next)
+                        .then((persisted) => {
+                          if (persisted) setAnalyticsOn(next)
+                        })
+                        .catch(() => {})
+                        .finally(() => setAnalyticsSaving(false))
+                    }}
+                  />
+                </div>
               </>
             )}
             {section === 'about' && (

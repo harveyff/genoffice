@@ -22,6 +22,37 @@ export type UiLanguage =
   | 'hi'
   | 'zh-TW'
 
+/**
+ * AI backend selection, as edited by the settings dialog and stored in
+ * userData/ai-settings.json — one setting shared by docs, sheets, slides and
+ * pdf. Kept self-contained here (mirrors AiModelSettings in
+ * @genoffice/ai-provider, which the main process resolves it against).
+ */
+export interface AiModelSettings {
+  /** 'genspark' routes through the signed-in account; 'custom' calls the endpoint below directly */
+  mode: 'genspark' | 'custom'
+  /** OpenAI-compatible endpoint, e.g. https://api.deepseek.com/v1 */
+  baseUrl: string
+  model: string
+  /** may be empty: local servers (Ollama, LM Studio, vLLM) accept anonymous requests */
+  apiKey: string
+  /** null leaves the field out of the request — reasoning models reject any value but their own */
+  temperature: number | null
+  /** null uses each app's per-request default */
+  maxTokens: number | null
+  /** null omits `reasoning_effort` */
+  reasoningEffort: ReasoningEffort | null
+}
+
+/** OpenAI-compatible thinking budget (mirrors ReasoningEffort in @genoffice/ai-provider) */
+export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high'
+
+/** result of dry-running a custom endpoint from the settings dialog */
+export interface AiProviderTestResult {
+  ok: boolean
+  error?: string
+}
+
 /** UI theme preference */
 export type UiTheme = 'light' | 'dark' | 'system'
 
@@ -78,6 +109,8 @@ export interface HomeApi {
   newSlide(opts?: { projectId?: string }): Promise<void>
   /** open a blank markdown editor tab */
   newMarkdown(opts?: { projectId?: string }): Promise<void>
+  /** create a blank single-page PDF in the default save folder and open it */
+  newPdf(opts?: { projectId?: string }): Promise<void>
   /** drop entries from the recent list (does not touch the files) */
   removeRecent(paths: string[]): Promise<void>
   /** reveal the file in Finder / Explorer */
@@ -108,16 +141,28 @@ export interface HomeApi {
   openLoginUrl(): Promise<void>
   /** log out (clears the saved API key; the login state is shared globally with the gsk CLI) */
   accountLogout(): Promise<void>
+  /** open the standalone settings window */
+  openSettings(): Promise<void>
+  /** current AI backend selection (shared by every editor module) */
+  getAiModelSettings(): Promise<AiModelSettings>
+  /** persist the AI backend selection; returns what was actually stored (an incomplete custom endpoint falls back to Genspark) */
+  setAiModelSettings(settings: AiModelSettings): Promise<AiModelSettings>
+  /** dry-run a custom endpoint without saving it */
+  testAiProvider(settings: Omit<AiModelSettings, 'mode'>): Promise<AiProviderTestResult>
   /** app version (from package.json / electron app.getVersion) */
   getAppVersion(): Promise<string>
   /** whether the first-run onboarding has been completed or skipped (persisted in userData/app-settings.json) */
   onboardingSeen(): Promise<boolean>
-  /** mark the first-run onboarding as done so it never shows again */
-  setOnboardingSeen(): Promise<void>
+  /** mark onboarding done; analytics remains enabled unless separately opted out */
+  setOnboardingSeen(): Promise<boolean>
   /** current UI theme preference (persisted in userData/app-settings.json) */
   getTheme(): Promise<UiTheme>
   /** switch + persist the UI theme; broadcasts 'app:theme-changed' to all web contents */
   setTheme(theme: UiTheme): Promise<void>
+  /** whether anonymous usage statistics are enabled (default true in official builds) */
+  getAnalyticsEnabled(): Promise<boolean>
+  /** persist an explicit analytics opt-in or opt-out */
+  setAnalyticsEnabled(enabled: boolean): Promise<boolean>
   /** effective default save folder for new/untitled files (configured in userData/app-settings.json, falls back to <Documents>/GenOffice) */
   getDefaultSaveDir(): Promise<string>
   /** directory picker to change the default save folder; resolves to the new folder, or null when canceled or the pick was unusable */
@@ -171,6 +216,13 @@ export interface CloudProjectEntry {
 }
 
 /** full local copy of the cloud project list; filtering/paging are client-side */
+/**
+ * Why a sync failed, when the reason changes what the user should do about it.
+ * 'credits' in particular must not be offered a Retry button — the account is
+ * out of credits and retrying can never succeed.
+ */
+export type CloudProjectsError = 'credits' | 'signedOut' | 'network' | 'unknown'
+
 export interface CloudProjectsSnapshot {
   /** false when gsk is unavailable (CLI missing or not logged in) */
   available: boolean
@@ -178,6 +230,8 @@ export interface CloudProjectsSnapshot {
   projects: CloudProjectEntry[]
   /** ms epoch of the last successful sync (0 when never synced) */
   syncedAt: number
+  /** set when the sync failed; `projects` then holds whatever was cached */
+  error?: CloudProjectsError
 }
 
 export interface AccountStatus {
@@ -254,6 +308,7 @@ export const HOME_CHANNELS = {
   newSheet: 'home:new-sheet',
   newSlide: 'home:new-slide',
   newMarkdown: 'home:new-markdown',
+  newPdf: 'home:new-pdf',
   removeRecent: 'home:remove-recent',
   revealPath: 'home:reveal-path',
   renameFile: 'home:rename-file',
@@ -274,6 +329,8 @@ export const HOME_CHANNELS = {
   setOnboardingSeen: 'home:set-onboarding-seen',
   getTheme: 'home:get-theme',
   setTheme: 'home:set-theme',
+  getAnalyticsEnabled: 'home:get-analytics-enabled',
+  setAnalyticsEnabled: 'home:set-analytics-enabled',
   getDefaultSaveDir: 'home:get-default-save-dir',
   pickDefaultSaveDir: 'home:pick-default-save-dir',
   openGenTeam: 'home:open-genteam',
@@ -285,6 +342,17 @@ export const HOME_CHANNELS = {
   cloudProjects: 'home:cloud-projects',
   cloudProjectsCached: 'home:cloud-projects-cached',
   openCloudProject: 'home:open-cloud-project',
+  openSettings: 'home:open-settings',
+} as const
+
+/**
+ * App-wide AI handlers, registered once by docs-main's registerAiIpc (not in
+ * the home namespace) and shared with every editor module; pass-through only.
+ */
+export const AI_CHANNELS = {
+  getModelSettings: 'ai:get-model-settings',
+  setModelSettings: 'ai:set-model-settings',
+  testProvider: 'ai:test-provider',
 } as const
 
 export const PROJECT_CHANNELS = {

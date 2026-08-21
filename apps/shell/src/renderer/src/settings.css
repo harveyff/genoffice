@@ -1,3 +1,5 @@
+@import './home.css';
+
 /* Settings modal (opened from the account menu): two-pane dialog matched to
    GenMail's settings window (values read from its packaged CSS) — borderless
    header/nav, label-left / control-right rows with hairline dividers.
@@ -164,6 +166,60 @@
   word-break: break-all;
 }
 
+/* stacked label + secondary description (analytics toggle row) */
+.set-field-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.set-field-desc {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+/* on/off switch (analytics toggle) */
+.set-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 40px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 11px;
+  background: var(--bg-hover-strong);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.set-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow-modal-strong);
+  transition: left 0.15s ease;
+}
+
+.set-switch[aria-checked='true'] {
+  background: var(--color-btn-primary);
+}
+
+.set-switch[aria-checked='true']::after {
+  left: 20px;
+}
+
+.set-switch:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 /* GenMail-style select pill: the visible layer is just the current value +
    chevron (width hugs the content); the real <select> sits on top invisibly
    and only supplies the click target and the native popup. */
@@ -263,4 +319,312 @@
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* Standalone settings window: sidebar + scrolling panel.
+   Reuses the .ai-* field primitives and .btn styles from home.css. */
+
+html:has(.settings) body {
+  overflow: hidden;
+}
+
+.settings {
+  display: flex;
+  height: 100vh;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+  width: 200px;
+  padding: 18px 10px;
+  border-right: 1px solid var(--border);
+  background: var(--surface-subtle);
+  overflow-y: auto;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.settings-nav-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 0 4px 0 10px;
+}
+
+.settings-nav-title {
+  padding: 0;
+  margin-bottom: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.settings-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.settings-nav-close {
+  margin-top: auto;
+  padding: 10px;
+  border: none;
+  border-radius: 8px;
+  background: var(--bg-hover);
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.settings-nav-close:hover {
+  background: var(--bg-hover-strong, var(--bg-hover));
+}
+
+.settings-nav-item {
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  text-align: start;
+  cursor: pointer;
+}
+
+.settings-nav-item:hover {
+  background: var(--bg-hover);
+}
+
+.settings-nav-item.active {
+  background: var(--surface);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 6%);
+}
+
+.settings-body {
+  flex: 1;
+  min-width: 0;
+  padding: 24px 28px 32px;
+  overflow-y: auto;
+}
+
+.settings-section > h2 {
+  margin: 0 0 6px;
+  font-size: 17px;
+}
+
+.settings-hint,
+.settings-empty {
+  margin: 0 0 18px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.settings-note {
+  margin: 18px 0 0;
+  padding: 10px 12px;
+  background: var(--surface-subtle);
+  border-radius: var(--radius-8);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.settings-saved {
+  font-size: 12px;
+  color: var(--success);
+}
+
+.settings-textarea {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-6);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  resize: vertical;
+}
+
+.settings-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.settings-textarea.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+}
+
+.settings-rule {
+  margin-bottom: 14px;
+}
+
+/* ── skills ── */
+
+.settings-drop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius-8);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.settings-drop.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: var(--accent);
+}
+
+.settings-drop-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.settings-skill-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* the memory list sits under the rules editor, inside the same section */
+.settings-subhead {
+  margin: 22px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* a recorded preference is a sentence, so it wraps rather than truncating —
+   the user has to be able to read the whole thing to judge whether to keep it */
+.settings-memory-text {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.settings-skill {
+  padding: 12px 14px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-8);
+}
+
+.settings-skill.off {
+  opacity: 0.6;
+}
+
+.settings-skill-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.settings-skill-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.settings-skill-id {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.settings-skill-desc {
+  margin-top: 3px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.settings-skill-scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.settings-chip {
+  padding: 2px 8px;
+  background: var(--surface-subtle);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.settings-chip.off {
+  background: rgb(239 68 68 / 12%);
+  color: var(--color-error);
+}
+
+.settings-skill-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.settings-scope-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.settings-scope-option {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* ── general ── */
+
+.settings-account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.settings-version {
+  font-size: 13px;
+  color: var(--text-secondary);
 }
