@@ -1,5 +1,12 @@
 import type { AgentToolCall, AgentToolDef, ToolExecution } from './types'
 
+/** One tool call actually executed during a run, as seen by verifyResponse. */
+export interface ExecutedToolCall {
+  name: string
+  /** false when the execution returned an error result */
+  ok: boolean
+}
+
 /**
  * A skill packages one capability domain for the agent loop: its system
  * prompt section, its tools, per-turn context, and the tool executor.
@@ -21,6 +28,15 @@ export interface AgentSkill {
    * their loops and stop promptly.
    */
   executeTool(call: AgentToolCall, signal?: AbortSignal): ToolExecution | Promise<ToolExecution>
+  /**
+   * Claimed-action guard: inspect the run's final assistant text against the
+   * tools that actually executed during the run. Return a corrective
+   * instruction to force one more model turn (e.g. the text claims "I
+   * selected/located ..." but no matching tool call succeeded), or null to
+   * accept the reply. The loop applies the correction at most once per run,
+   * so a detector false-positive costs one extra turn and cannot loop.
+   */
+  verifyResponse?(finalText: string, executed: readonly ExecutedToolCall[]): string | null
 }
 
 /**
@@ -28,28 +44,49 @@ export interface AgentSkill {
  * `intro` becomes the shared preamble of the combined system prompt.
  */
 export function composeSkills(id: string, intro: string, skills: AgentSkill[]): AgentSkill {
-  const owner = new Map<string, AgentSkill>()
-  for (const skill of skills) {
-    for (const tool of skill.tools) {
-      if (owner.has(tool.name)) throw new Error(`duplicate tool name: ${tool.name}`)
-      owner.set(tool.name, skill)
+  /**
+   * Resolved on read, not at compose time: a skill may expose a tool list that
+   * changes during the session (the web skill only offers `load_skill` once the
+   * user has one). The loop re-reads `skill.tools` per request, so keeping this
+   * lazy is what lets a newly added skill be callable without remounting the
+   * panel — and it keeps the routing map from going stale against it.
+   */
+  const currentOwners = (): Map<string, AgentSkill> => {
+    const owner = new Map<string, AgentSkill>()
+    for (const skill of skills) {
+      for (const tool of skill.tools) {
+        if (owner.has(tool.name)) throw new Error(`duplicate tool name: ${tool.name}`)
+        owner.set(tool.name, skill)
+      }
     }
+    return owner
   }
+  // fail fast on a duplicate that is present from the start
+  currentOwners()
   return {
     id,
     systemPrompt: [intro, ...skills.map((s) => s.systemPrompt)].filter(Boolean).join('\n\n'),
-    tools: skills.flatMap((s) => s.tools),
+    get tools() {
+      return skills.flatMap((s) => s.tools)
+    },
     buildContext: () =>
       skills
         .map((s) => s.buildContext?.() ?? '')
         .filter(Boolean)
         .join('\n\n'),
     executeTool: (call, signal) => {
-      const skill = owner.get(call.name)
+      const skill = currentOwners().get(call.name)
       if (!skill) {
         return { output: `Unknown tool: ${call.name}`, isError: true, summary: call.name }
       }
       return skill.executeTool(call, signal)
+    },
+    verifyResponse: (finalText, executed) => {
+      for (const skill of skills) {
+        const correction = skill.verifyResponse?.(finalText, executed)
+        if (correction) return correction
+      }
+      return null
     },
   }
 }

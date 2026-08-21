@@ -1,4 +1,4 @@
-import type { AgentSkill } from './skill'
+import type { AgentSkill, ExecutedToolCall } from './skill'
 import type {
   AgentImage,
   AgentMessage,
@@ -80,6 +80,13 @@ const STALE_TOOL_OUTPUT_MAX = 1_000
 
 /** Cap on consecutive tool-input parse failures (a successful parse resets it); abort beyond it (keeps the model from burning turns on bad JSON) */
 const MAX_INPUT_PARSE_RETRIES = 3
+
+/**
+ * Images one tool turn may hand back. Each is a full-page render worth
+ * hundreds of KB of base64, so a model that keeps capturing would otherwise
+ * push the rest of the conversation out of the window within a few turns.
+ */
+const MAX_TOOL_IMAGES_PER_TURN = 4
 
 const TURN_LIMIT_NOTE =
   '[System] The tool-call turn limit for this request has been reached; no more tools may be called this turn. ' +
@@ -172,6 +179,10 @@ export class AgentLoop<TSnapshot = unknown> {
   private turnStopReason: string | null = null
   private turnText = ''
   private toolCalls: AgentToolCall[] = []
+  /** tools actually executed during this run, fed to skill.verifyResponse */
+  private executedCalls: ExecutedToolCall[] = []
+  /** verifyResponse may force one extra corrective turn per run — never more */
+  private verifyRetryUsed = false
   /** user message of the in-flight run; a failed run rolls it (and everything after) back out of history */
   private runUserMsg: AgentMessage | null = null
   /** invalidates stale transport callbacks after cancel/reset */
@@ -238,6 +249,8 @@ export class AgentLoop<TSnapshot = unknown> {
     this.finalizing = false
     this.mutationSeen = false
     this.inputParseFails = 0
+    this.executedCalls = []
+    this.verifyRetryUsed = false
     this.abortController = new AbortController()
     const context = this.options.skill.buildContext?.() ?? ''
     const format =
@@ -405,6 +418,19 @@ export class AgentLoop<TSnapshot = unknown> {
     if (!this.compactionEnabled()) return
     const { maxBytes } = this.compactBudget()
     if (historySize(this.history) <= maxBytes) return
+    // A render is worth hundreds of KB and is almost never re-read once the
+    // model has acted on it, so the oldest ones go first — and go entirely,
+    // since half an image is worth nothing. Only turns the loop itself created
+    // for tool output; images the user attached are theirs to keep.
+    let renders = 0
+    for (let i = this.history.length - 1; i >= 0; i--) {
+      const m = this.history[i]!
+      if (m.role !== 'user' || !m.fromTool || !m.images?.length) continue
+      renders++
+      if (renders <= 1) continue
+      delete m.images
+      m.text = '(image from an earlier tool call, dropped to save space)'
+    }
     let recent = 0
     for (let i = this.history.length - 1; i >= 0; i--) {
       const m = this.history[i]!
@@ -503,6 +529,29 @@ export class AgentLoop<TSnapshot = unknown> {
     const { events, skill, captureSnapshot } = this.options
     const toolCalls = this.toolCalls
 
+    // Claimed-action guard: before accepting a final text turn, let the skill
+    // check the claims in it against the tools that actually ran this run.
+    // A returned correction forces one more model turn (tools stay available,
+    // so the model can perform the missing action or reword its claim).
+    if (toolCalls.length === 0 && !this.cancelled && !this.finalizing) {
+      // snapshot copy: the live array keeps growing if the corrective turn
+      // runs more tools, and the hook must see the state at check time
+      const correction =
+        !this.verifyRetryUsed && this.turnText && skill.verifyResponse
+          ? skill.verifyResponse(this.turnText, [...this.executedCalls])
+          : null
+      if (correction) {
+        this.verifyRetryUsed = true
+        this.history.push({ role: 'assistant', text: this.turnText })
+        this.history.push({ role: 'user', text: correction })
+        // No onTurnEnd here: UIs use it to seal the current assistant bubble,
+        // which would keep the rejected claim visible. Without it, the
+        // corrective turn's cumulative onText overwrites the bubble in place.
+        this.startTurn()
+        return
+      }
+    }
+
     // final turn: no tools requested, the user stopped the run, or the
     // no-tools finalizing turn after hitting the limit
     // (a cancelled turn drops its tool calls — no results would follow)
@@ -530,9 +579,20 @@ export class AgentLoop<TSnapshot = unknown> {
       return
     }
 
-    this.history.push({ role: 'assistant', text: this.turnText, toolCalls })
+    // Strip turn-local execution hints (inputError/truncated) from the stored
+    // history: they are not model context, and transports with strict message
+    // schemas (the Electron IPC bridge) reject unknown tool-call keys when the
+    // history is echoed back on the next turn. The OpenAI-compatible stream
+    // paths attach `inputError: undefined` on every parsed call, so without
+    // this the second turn of any custom-provider agent run fails validation.
+    this.history.push({
+      role: 'assistant',
+      text: this.turnText,
+      toolCalls: toolCalls.map(({ id, name, input }) => ({ id, name, input })),
+    })
     const generation = this.generation
     const results: AgentToolResult[] = []
+    const toolImages: AgentImage[] = []
     for (const call of toolCalls) {
       // The user hit stop while an earlier tool was running: skip remaining tools,
       // but fill in paired error results to keep tool_use/tool_result pairs valid for the next request
@@ -573,6 +633,7 @@ export class AgentLoop<TSnapshot = unknown> {
         }
       }
       if (generation !== this.generation) return // reset while a tool was running
+      this.executedCalls.push({ name: call.name, ok: !execution.isError })
       const firstMutation = !!execution.mutated && !this.mutationSeen
       if (execution.mutated) this.mutationSeen = true
       results.push({
@@ -581,6 +642,7 @@ export class AgentLoop<TSnapshot = unknown> {
         output: execution.output,
         isError: execution.isError,
       })
+      if (execution.images?.length) toolImages.push(...execution.images)
       events?.onToolExecuted?.({
         call,
         execution,
@@ -588,6 +650,23 @@ export class AgentLoop<TSnapshot = unknown> {
       })
     }
     this.history.push({ role: 'tool', results })
+
+    // A tool that produced images (a rendered page, a slide) hands them over
+    // here: tool results are text on every provider, so the pictures ride a
+    // follow-up user turn, which all three accept. Capped so a tool looping on
+    // captures cannot bury the conversation in screenshots.
+    const images = toolImages.slice(0, MAX_TOOL_IMAGES_PER_TURN)
+    if (images.length > 0) {
+      this.history.push({
+        role: 'user',
+        text:
+          images.length === 1
+            ? '(image returned by the previous tool call)'
+            : `(${images.length} images returned by the previous tool calls)`,
+        images,
+        fromTool: true,
+      })
+    }
 
     // Cancelled while tools were executing: finish immediately, no further model request
     if (this.cancelled) {

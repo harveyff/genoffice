@@ -710,6 +710,41 @@ describe('AgentLoop compaction', () => {
     expect(last.results[0]!.output).toBe(big)
   })
 
+  it('over budget mid-run drops every render but the newest', async () => {
+    const png = 'p'.repeat(3_000)
+    const script = Array.from({ length: 3 }, (_, i) => (cb: AgentStreamCallbacks) => {
+      cb.onToolCall({ id: `t${i}`, name: 'do_thing', input: {} })
+      cb.onDone()
+    })
+    script.push((cb) => {
+      cb.onDelta('done')
+      cb.onDone()
+    })
+    const transport = scriptedTransport(script)
+    const loop = new AgentLoop({
+      transport,
+      skill: makeSkill(() => ({
+        output: 'rendered',
+        summary: 'view_page',
+        mutated: false,
+        images: [{ base64: png, mime: 'image/png' }],
+      })),
+      compaction: { maxBytes: 5_000, keepRecentBytes: 2_000, disableLlmSummary: true },
+    })
+    loop.run('check the layout')
+    await flush()
+    await flush()
+    await flush()
+    await flush()
+    const renders = loop.messages.filter((m) => m.role === 'user' && m.fromTool)
+    expect(renders).toHaveLength(3)
+    const withImages = renders.filter((m) => 'images' in m && m.images?.length)
+    expect(withImages).toHaveLength(1)
+    // the one kept is the newest, and it is the last render in the history
+    expect(withImages[0]).toBe(renders[2])
+    expect((renders[0] as { text: string }).text).toContain('dropped to save space')
+  })
+
   it('compaction: false disables both folding and truncation', async () => {
     const transport = scriptedTransport([
       (cb) => {
@@ -898,6 +933,119 @@ describe('AgentLoop compaction', () => {
   })
 })
 
+describe('AgentLoop: verifyResponse (claimed-action guard)', () => {
+  const claimText = (cb: AgentStreamCallbacks) => {
+    cb.onDelta('I have selected the row for you')
+    cb.onDone()
+  }
+
+  it('forces one corrective turn when the final text fails verification', async () => {
+    const transport = scriptedTransport([
+      claimText,
+      (cb) => {
+        cb.onDelta('Sorry — nothing was selected; tell me if you want me to do it')
+        cb.onDone()
+      },
+    ])
+    const verifyResponse = vi.fn().mockReturnValueOnce('[System check] claim not backed by a tool')
+    const onDone = vi.fn()
+    const onTurnEnd = vi.fn()
+    const loop = new AgentLoop({
+      transport,
+      skill: { ...makeSkill(), verifyResponse },
+      events: { onDone, onTurnEnd },
+    })
+    loop.run('locate the row')
+    await flush()
+    await flush()
+    expect(verifyResponse).toHaveBeenCalledWith('I have selected the row for you', [])
+    expect(transport.requests).toHaveLength(2)
+    expect(onDone).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'Sorry — nothing was selected; tell me if you want me to do it',
+      }),
+    )
+    // no onTurnEnd on the correction: UIs seal the current assistant bubble on
+    // that event, which would keep the rejected claim visible; the corrective
+    // turn must overwrite the bubble in place instead
+    expect(onTurnEnd).not.toHaveBeenCalled()
+    // history keeps the claim, the corrective instruction, and the fixed reply
+    expect(loop.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant'])
+    expect((loop.messages[2] as { text: string }).text).toContain('[System check]')
+  })
+
+  it('lets the corrective turn actually call the missing tool', async () => {
+    const transport = scriptedTransport([
+      claimText,
+      (cb) => {
+        cb.onToolCall({ id: 't1', name: 'do_thing', input: {} })
+        cb.onDone()
+      },
+      (cb) => {
+        cb.onDelta('Now it is really selected')
+        cb.onDone()
+      },
+    ])
+    const verifyResponse = vi.fn((_text: string, executed: readonly { name: string }[]) =>
+      executed.some((c) => c.name === 'do_thing') ? null : 'call the tool first',
+    )
+    const onDone = vi.fn()
+    const loop = new AgentLoop({
+      transport,
+      skill: { ...makeSkill(), verifyResponse },
+      events: { onDone },
+    })
+    loop.run('locate the row')
+    for (let i = 0; i < 4; i++) await flush()
+    expect(transport.requests).toHaveLength(3)
+    // the guard fired once on the unbacked claim; after the corrective turn
+    // ran the tool, the run completed without re-verifying (once per run)
+    expect(verifyResponse).toHaveBeenCalledTimes(1)
+    expect(verifyResponse).toHaveBeenCalledWith('I have selected the row for you', [])
+    expect(onDone).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Now it is really selected' }),
+    )
+  })
+
+  it('applies the correction at most once per run (no loop on a stubborn model)', async () => {
+    const transport = scriptedTransport([claimText, claimText])
+    const verifyResponse = vi.fn().mockReturnValue('still unbacked')
+    const onDone = vi.fn()
+    const loop = new AgentLoop({
+      transport,
+      skill: { ...makeSkill(), verifyResponse },
+      events: { onDone },
+    })
+    loop.run('locate the row')
+    await flush()
+    await flush()
+    expect(verifyResponse).toHaveBeenCalledTimes(1)
+    expect(transport.requests).toHaveLength(2)
+    expect(onDone).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'I have selected the row for you' }),
+    )
+    expect(loop.busy).toBe(false)
+  })
+
+  it('passes successful and failed executions with their ok flag', async () => {
+    const transport = scriptedTransport([
+      (cb) => {
+        cb.onToolCall({ id: 't1', name: 'do_thing', input: { fail: true } })
+        cb.onDone()
+      },
+      claimText,
+    ])
+    const verifyResponse = vi.fn().mockReturnValue(null)
+    const skill = makeSkill(() => ({ output: 'boom', isError: true, summary: 'failed' }))
+    const loop = new AgentLoop({ transport, skill: { ...skill, verifyResponse } })
+    loop.run('x')
+    for (let i = 0; i < 3; i++) await flush()
+    expect(verifyResponse).toHaveBeenCalledWith('I have selected the row for you', [
+      { name: 'do_thing', ok: false },
+    ])
+  })
+})
+
 describe('composeSkills', () => {
   it('merges prompts, tools and context, and routes execution', async () => {
     const a: AgentSkill = {
@@ -931,5 +1079,116 @@ describe('composeSkills', () => {
       executeTool: () => ({ output: '', summary: '' }),
     })
     expect(() => composeSkills('x', '', [make('a'), make('b')])).toThrow(/duplicate/)
+  })
+
+  it('verifyResponse returns the first non-null correction across skills', () => {
+    const make = (id: string, correction: string | null): AgentSkill => ({
+      id,
+      systemPrompt: '',
+      tools: [],
+      executeTool: () => ({ output: '', summary: '' }),
+      verifyResponse: () => correction,
+    })
+    const merged = composeSkills('x', '', [
+      make('a', null),
+      make('b', 'fix from b'),
+      make('c', 'fix from c'),
+    ])
+    expect(merged.verifyResponse?.('text', [])).toBe('fix from b')
+    const clean = composeSkills('y', '', [make('a', null)])
+    expect(clean.verifyResponse?.('text', [])).toBeNull()
+  })
+})
+
+// A tool that renders a page hands the picture back so the model can judge
+// layout. Tool results are text on every provider we support, so the loop
+// re-homes the images onto a user turn, which all three accept.
+describe('AgentLoop: images returned by a tool', () => {
+  const png = (b64: string) => ({ base64: b64, mime: 'image/png' })
+
+  const captureTurn = (cb: AgentStreamCallbacks) => {
+    cb.onToolCall({ id: 't1', name: 'do_thing', input: {} })
+    cb.onDone()
+  }
+  const finalTurn = (cb: AgentStreamCallbacks) => {
+    cb.onDelta('the title overflows')
+    cb.onDone()
+  }
+
+  it('re-homes them onto a user turn after the tool results', async () => {
+    const transport = scriptedTransport([captureTurn, finalTurn])
+    const loop = new AgentLoop({
+      transport,
+      skill: makeSkill(() => ({ output: 'captured', summary: 'view', images: [png('IMG')] })),
+    })
+    loop.run('check the layout')
+    await flush()
+    await flush()
+
+    const toolIndex = loop.messages.findIndex((m) => m.role === 'tool')
+    const next = loop.messages[toolIndex + 1]!
+    expect(next.role).toBe('user')
+    expect((next as { images?: unknown[] }).images).toEqual([png('IMG')])
+    // the tool result itself stays text — that is the whole reason for this
+    expect(loop.messages[toolIndex]).toMatchObject({
+      results: [{ output: 'captured' }],
+    })
+  })
+
+  it('adds nothing when a tool returns no images', async () => {
+    const transport = scriptedTransport([captureTurn, finalTurn])
+    const loop = new AgentLoop({ transport, skill: makeSkill() })
+    loop.run('just edit it')
+    await flush()
+    await flush()
+
+    // the next model turn follows directly; no synthetic image turn is inserted
+    const injected = loop.messages.filter(
+      (m) => m.role === 'user' && (m as { images?: unknown[] }).images,
+    )
+    expect(injected).toEqual([])
+  })
+
+  it('caps how many one turn can hand back', async () => {
+    const transport = scriptedTransport([captureTurn, finalTurn])
+    const many = Array.from({ length: 12 }, (_, i) => png(`IMG${i}`))
+    const loop = new AgentLoop({
+      transport,
+      skill: makeSkill(() => ({ output: 'captured', summary: 'view', images: many })),
+    })
+    loop.run('capture everything')
+    await flush()
+    await flush()
+
+    const injected = loop.messages.find(
+      (m) => m.role === 'user' && (m as { images?: unknown[] }).images,
+    ) as { images: unknown[] } | undefined
+    expect(injected!.images.length).toBeLessThan(many.length)
+    // a full-page render is hundreds of KB of base64; an uncapped tool loop
+    // would push the conversation out of the window in a couple of turns
+    expect(injected!.images.length).toBeLessThanOrEqual(4)
+  })
+
+  it('gathers images from several tool calls in the same turn', async () => {
+    const twoCalls = (cb: AgentStreamCallbacks) => {
+      cb.onToolCall({ id: 't1', name: 'do_thing', input: { page: 1 } })
+      cb.onToolCall({ id: 't2', name: 'do_thing', input: { page: 2 } })
+      cb.onDone()
+    }
+    const transport = scriptedTransport([twoCalls, finalTurn])
+    let n = 0
+    const loop = new AgentLoop({
+      transport,
+      skill: makeSkill(() => ({ output: 'captured', summary: 'view', images: [png(`P${n++}`)] })),
+    })
+    loop.run('show me both pages')
+    await flush()
+    await flush()
+
+    const injected = loop.messages.find(
+      (m) => m.role === 'user' && (m as { images?: unknown[] }).images,
+    ) as { images: unknown[]; text: string } | undefined
+    expect(injected!.images).toEqual([png('P0'), png('P1')])
+    expect(injected!.text).toContain('2 images')
   })
 })
