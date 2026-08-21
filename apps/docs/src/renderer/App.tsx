@@ -649,6 +649,7 @@ export function App() {
 
   const editorRef = useRef<Editor | null>(null)
   const editor = useEditor({
+    immediatelyRender: true,
     extensions: editorExtensions,
     content: { type: 'doc', content: [{ type: 'docParagraph' }] },
     editorProps: {
@@ -3292,7 +3293,13 @@ export function App() {
     [hasDoc, hasUnsavedChanges, autoSave, editor, save, lang, histState],
   )
 
-  if (!editor) return null
+  if (!editor) {
+    return (
+      <div className="app">
+        <div className="start-screen start-booting">{t('appStartOpening')}</div>
+      </div>
+    )
+  }
 
   const wordCount = wordCountOfDoc(editor.state.doc)
 

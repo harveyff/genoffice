@@ -575,7 +575,6 @@ export function AiPanel({
         // Restore model context: follow-ups after reopening a file continue the earlier conversation (only when the loop is idle with no history)
         loopRef.current?.restore(msgs.map((m) => ({ role: m.role, text: m.text })))
       })
-      .then((ids) => showStoredChat(ids))
       .catch(() => {
         /* History load failures are silent */
       })
