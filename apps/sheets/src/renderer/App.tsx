@@ -1112,9 +1112,13 @@ export function App(): React.JSX.Element {
     const config = settings.providers[settings.provider]
     if (!config?.model) return false
     // Genspark's key never lands in the settings file; the main process injects
-    // it from the gsk login state. When logged out, requests return an error
-    // guiding sign-in — not intercepted here.
-    return settings.provider === 'genspark' || !!config.apiKey
+    // it from the gsk login state. Custom endpoints (Ollama, LM Studio, vLLM)
+    // are often anonymous — match sheets-main needsApiKey().
+    return (
+      settings.provider === 'genspark' ||
+      settings.provider === 'custom' ||
+      !!config.apiKey
+    )
   }
 
   /** Image attachments read as base64 and sent multimodal with this user message
