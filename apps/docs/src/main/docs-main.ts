@@ -2557,11 +2557,8 @@ function readAiSettings(): AiSettings {
 export { applyNetworkSettings, applyProxy, currentProxyUrl } from '@genoffice/electron-utils'
 
 /**
- * Load the persisted network settings at startup. Returns true when the user
- * configured an explicit proxy, which tells the app bootstraps to skip their
- * env-var / system-proxy detection: an explicit choice must win over both, and
- * must also be honoured when it says "no proxy" on a machine whose system
- * proxy would otherwise be picked up.
+ * Load the persisted network settings at startup. Returns true when
+ * `ai-settings.json` exists so bootstraps skip env/system proxy detection.
  */
 export function bootstrapNetworkSettings(): boolean {
   return bootstrapNetworkSettingsIn(app.getPath('userData'))

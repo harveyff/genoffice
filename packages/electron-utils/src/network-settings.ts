@@ -80,8 +80,9 @@ export async function applyProxy(rawUrl: string): Promise<void> {
     console.warn('[proxy] failed to set undici dispatcher:', err)
   }
   try {
-    // proxyRules '' clears it; Chromium understands socks5:// here too
-    await session.defaultSession.setProxy(proxyUrl ? { proxyRules: proxyUrl } : { mode: 'system' })
+    // Empty proxy = direct. On Olares/Kasm the Chromium "system" proxy often
+    // points at cluster egress (e.g. *.frp.olares.com) and breaks local LLMs.
+    await session.defaultSession.setProxy(proxyUrl ? { proxyRules: proxyUrl } : { mode: 'direct' })
   } catch (err) {
     console.warn('[proxy] failed to set session proxy:', err)
   }
@@ -89,7 +90,7 @@ export async function applyProxy(rawUrl: string): Promise<void> {
     proxyUrl
       ? // strip user:pass before logging
         `[proxy] outbound via ${proxyUrl.replace(/\/\/[^@/]*@/, '//***@')}`
-      : '[proxy] direct (system default)',
+      : '[proxy] direct',
   )
 }
 
@@ -109,14 +110,15 @@ export function applyNetworkSettings(settings: Partial<NetworkSettings>): void {
 }
 
 /**
- * Load the persisted network settings at startup. Returns true when the user
- * configured an explicit proxy, which tells the app bootstraps to skip their
- * env-var / system-proxy detection: an explicit choice must win over both, and
- * must also be honoured when it says "no proxy" on a machine whose system
- * proxy would otherwise be picked up.
+ * Load the persisted network settings at startup. Returns true when
+ * `ai-settings.json` exists, which tells app bootstraps to skip env-var /
+ * system-proxy detection: a saved file (even with an empty proxy field) is an
+ * explicit "use direct" choice on machines whose system proxy would otherwise
+ * hijack local LLM endpoints.
  */
 export function bootstrapNetworkSettings(userDataPath: string): boolean {
+  const settingsPath = join(userDataPath, SETTINGS_FILE)
   const settings = readNetworkSettings(userDataPath)
   applyNetworkSettings(settings)
-  return !!normalizeProxyUrl(settings.proxyUrl)
+  return existsSync(settingsPath)
 }

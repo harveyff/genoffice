@@ -57,14 +57,18 @@ describe('bootstrapNetworkSettings', () => {
     expect(bootstrapNetworkSettings(userData)).toBe(true)
   })
 
-  it('reports no explicit proxy when the field is blank, so env/system still apply', () => {
+  it('reports settings were loaded when the proxy field is blank, so env/system are skipped', () => {
     writeSettings({ proxyUrl: '', tavilyApiKey: 'tvly-abc' })
+    expect(bootstrapNetworkSettings(userData)).toBe(true)
+  })
+
+  it('reports no settings file so env/system detection may still run', () => {
     expect(bootstrapNetworkSettings(userData)).toBe(false)
   })
 
   it('reports no explicit proxy for an unusable value rather than wiring it up', () => {
     writeSettings({ proxyUrl: 'not a proxy' })
-    expect(bootstrapNetworkSettings(userData)).toBe(false)
+    expect(bootstrapNetworkSettings(userData)).toBe(true)
   })
 
   it('forwards the proxy to gsk CLI children — the whole point for PPT generation', () => {
@@ -80,7 +84,7 @@ describe('bootstrapNetworkSettings', () => {
     expect(gskProxyUrl()).toBe('http://127.0.0.1:7003')
 
     writeSettings({ proxyUrl: '' })
-    expect(bootstrapNetworkSettings(userData)).toBe(false)
+    expect(bootstrapNetworkSettings(userData)).toBe(true)
     expect(gskProxyUrl()).toBe('')
   })
 
